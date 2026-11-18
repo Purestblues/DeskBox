@@ -1,0 +1,426 @@
+<Window x:Class="DeskBox.Views.BoxAppearanceWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="DeskBox - 格子外观设置"
+        Width="440"
+        Height="620"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="True"
+        ResizeMode="NoResize">
+    <Window.Resources>
+        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#8E97A6"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,12,0,6"/>
+        </Style>
+
+        <Style x:Key="RowLabelStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#DCE2EC"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="ChipButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#2A2E37"/>
+            <Setter Property="Foreground" Value="#DCE2EC"/>
+            <Setter Property="BorderBrush" Value="#3D4350"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="9,4"/>
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#373D4A"/>
+                                <Setter TargetName="Bd" Property="BorderBrush" Value="#5B6477"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#22252C"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource ChipButtonStyle}">
+            <Setter Property="Background" Value="#2563EB"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#3B82F6"/>
+            <Setter Property="Padding" Value="14,6"/>
+            <Setter Property="FontSize" Value="12.5"/>
+        </Style>
+
+        <Style x:Key="FooterButtonStyle" TargetType="Button" BasedOn="{StaticResource ChipButtonStyle}">
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="FontSize" Value="12.5"/>
+        </Style>
+
+        <Style x:Key="DarkCheckBoxStyle" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#E2E7F0"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Margin" Value="0,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border x:Name="Box"
+                                    Width="16" Height="16"
+                                    CornerRadius="3"
+                                    Background="#2B303A"
+                                    BorderBrush="#48505F"
+                                    BorderThickness="1"
+                                    Margin="0,0,9,0">
+                                <TextBlock x:Name="Check"
+                                           Text="✓"
+                                           Foreground="#18D17B"
+                                           FontSize="11.5"
+                                           FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Visibility="Collapsed"/>
+                            </Border>
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="Box" Property="BorderBrush" Value="#18D17B"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Box" Property="Background" Value="#383E4B"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="DarkComboBoxStyle" TargetType="ComboBox">
+            <Setter Property="Width" Value="155"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Window.Resources>
+
+    <Border Background="#1D2026" CornerRadius="10" BorderBrush="#343945" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="42"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="52"/>
+            </Grid.RowDefinitions>
+
+            <!-- 标题栏 -->
+            <Border Grid.Row="0" Background="#17191E" CornerRadius="10,10,0,0" BorderBrush="#2A2E38" BorderThickness="0,0,0,1"
+                    MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <Grid>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,46,0">
+                        <Image Source="pack://application:,,,/Assets/deskbox.ico" Width="18" Height="18" Margin="0,0,8,0" RenderOptions.BitmapScalingMode="HighQuality"/>
+                        <TextBlock x:Name="TxtWindowTitle"
+                                   Text="格子外观设置"
+                                   Foreground="#F0F3F8"
+                                   FontSize="13.5"
+                                   FontWeight="SemiBold"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+                    <Button x:Name="BtnClose"
+                            AutomationProperties.AutomationId="AppearanceCloseButton"
+                            AutomationProperties.Name="关闭外观设置"
+                            HorizontalAlignment="Right"
+                            Width="40" Height="42"
+                            Background="Transparent"
+                            Foreground="#A8B1BF"
+                            BorderThickness="0"
+                            FontSize="14"
+                            Cursor="Hand"
+                            Content="✕"
+                            Click="BtnClose_Click"/>
+                </Grid>
+            </Border>
+
+            <!-- 主配置区域 -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="18,6,18,12">
+                <StackPanel>
+                    <!-- 1. 主题配色 -->
+                    <TextBlock Text="主题配色与自定义颜色" Style="{StaticResource SectionTitleStyle}" Margin="0,4,0,6"/>
+                    <Border Background="#23272F" CornerRadius="7" Padding="12,10" BorderBrush="#2E333E" BorderThickness="1">
+                        <StackPanel>
+                            <WrapPanel x:Name="PresetColorsPanel" Margin="0,0,0,8"/>
+
+                            <Grid Margin="0,4,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="CurrentColorPreview"
+                                        Grid.Column="0"
+                                        Width="26" Height="26"
+                                        CornerRadius="4"
+                                        BorderBrush="#55FFFFFF"
+                                        BorderThickness="1"
+                                        Margin="0,0,8,0"/>
+                                <TextBox x:Name="TxtCustomHex"
+                                         Grid.Column="1"
+                                         AutomationProperties.AutomationId="TxtCustomHex"
+                                         AutomationProperties.Name="自定义HEX颜色"
+                                         Height="26"
+                                         VerticalContentAlignment="Center"
+                                         Background="#1A1D23"
+                                         Foreground="#F0F4FA"
+                                         BorderBrush="#3D4350"
+                                         BorderThickness="1"
+                                         Padding="8,0"
+                                         FontSize="12"
+                                         KeyDown="TxtCustomHex_KeyDown"/>
+                                <Button x:Name="BtnApplyHex"
+                                        Grid.Column="2"
+                                        AutomationProperties.AutomationId="BtnApplyHex"
+                                        AutomationProperties.Name="应用HEX颜色"
+                                        Style="{StaticResource ChipButtonStyle}"
+                                        Content="应用颜色"
+                                        Margin="8,0,0,0"
+                                        Click="BtnApplyHex_Click"/>
+                            </Grid>
+
+                            <!-- RGB 微调滑块 -->
+                            <Grid Margin="0,2,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="18"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="32"/>
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="22"/>
+                                    <RowDefinition Height="22"/>
+                                    <RowDefinition Height="22"/>
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="R" Foreground="#F87171" FontSize="11.5" VerticalAlignment="Center"/>
+                                <Slider x:Name="SliderR" Grid.Row="0" Grid.Column="1" AutomationProperties.Name="红色通道" Minimum="0" Maximum="255" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" ValueChanged="RgbSlider_ValueChanged"/>
+                                <TextBlock x:Name="TxtRVal" Grid.Row="0" Grid.Column="2" Foreground="#A7B0BF" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="G" Foreground="#4ADE80" FontSize="11.5" VerticalAlignment="Center"/>
+                                <Slider x:Name="SliderG" Grid.Row="1" Grid.Column="1" AutomationProperties.Name="绿色通道" Minimum="0" Maximum="255" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" ValueChanged="RgbSlider_ValueChanged"/>
+                                <TextBlock x:Name="TxtGVal" Grid.Row="1" Grid.Column="2" Foreground="#A7B0BF" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="B" Foreground="#60A5FA" FontSize="11.5" VerticalAlignment="Center"/>
+                                <Slider x:Name="SliderB" Grid.Row="2" Grid.Column="1" AutomationProperties.Name="蓝色通道" Minimum="0" Maximum="255" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" ValueChanged="RgbSlider_ValueChanged"/>
+                                <TextBlock x:Name="TxtBVal" Grid.Row="2" Grid.Column="2" Foreground="#A7B0BF" FontSize="11.5" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 2. 透明度与毛玻璃 -->
+                    <TextBlock Text="透明度与毛玻璃质感" Style="{StaticResource SectionTitleStyle}"/>
+                    <Border Background="#23272F" CornerRadius="7" Padding="12,10" BorderBrush="#2E333E" BorderThickness="1">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="42"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="背景透明度" Style="{StaticResource RowLabelStyle}" Margin="0,0,10,0"/>
+                                <Slider x:Name="SliderOpacity"
+                                        Grid.Column="1"
+                                        AutomationProperties.AutomationId="SliderOpacity"
+                                        AutomationProperties.Name="背景透明度"
+                                        Minimum="0" Maximum="95"
+                                        IsSnapToTickEnabled="True" TickFrequency="1"
+                                        VerticalAlignment="Center"
+                                        ValueChanged="SliderOpacity_ValueChanged"/>
+                                <TextBlock x:Name="TxtOpacityVal" Grid.Column="2" Foreground="#E2E7F0" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <WrapPanel Margin="0,8,0,8">
+                                <Button Style="{StaticResource ChipButtonStyle}" Content="0% 全透" Tag="0" Margin="0,0,6,0" Click="BtnQuickOpacity_Click"/>
+                                <Button Style="{StaticResource ChipButtonStyle}" Content="25%" Tag="25" Margin="0,0,6,0" Click="BtnQuickOpacity_Click"/>
+                                <Button Style="{StaticResource ChipButtonStyle}" Content="40%" Tag="40" Margin="0,0,6,0" Click="BtnQuickOpacity_Click"/>
+                                <Button Style="{StaticResource ChipButtonStyle}" Content="65%" Tag="65" Margin="0,0,6,0" Click="BtnQuickOpacity_Click"/>
+                                <Button Style="{StaticResource ChipButtonStyle}" Content="85%" Tag="85" Click="BtnQuickOpacity_Click"/>
+                            </WrapPanel>
+
+                            <DockPanel Margin="0,2,0,0">
+                                <TextBlock Text="毛玻璃背景模糊" Style="{StaticResource RowLabelStyle}"/>
+                                <ComboBox x:Name="ComboFrostedGlass"
+                                          AutomationProperties.AutomationId="ComboFrostedGlass"
+                                          AutomationProperties.Name="毛玻璃效果模式"
+                                          Style="{StaticResource DarkComboBoxStyle}"
+                                          HorizontalAlignment="Right"
+                                          SelectionChanged="ComboFrostedGlass_SelectionChanged">
+                                    <ComboBoxItem Content="跟随全局设置" Tag="global"/>
+                                    <ComboBoxItem Content="单格开启毛玻璃" Tag="on"/>
+                                    <ComboBoxItem Content="单格关闭毛玻璃" Tag="off"/>
+                                </ComboBox>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 3. 边框与圆角 -->
+                    <TextBlock Text="边框与圆角" Style="{StaticResource SectionTitleStyle}"/>
+                    <Border Background="#23272F" CornerRadius="7" Padding="12,10" BorderBrush="#2E333E" BorderThickness="1">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="42"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="窗口圆角" Style="{StaticResource RowLabelStyle}" Margin="0,0,10,0"/>
+                                <Slider x:Name="SliderCornerRadius"
+                                        Grid.Column="1"
+                                        AutomationProperties.AutomationId="SliderCornerRadius"
+                                        AutomationProperties.Name="圆角大小"
+                                        Minimum="0" Maximum="16"
+                                        IsSnapToTickEnabled="True" TickFrequency="1"
+                                        VerticalAlignment="Center"
+                                        ValueChanged="SliderCornerRadius_ValueChanged"/>
+                                <TextBlock x:Name="TxtCornerVal" Grid.Column="2" Foreground="#E2E7F0" FontSize="12" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            </Grid>
+
+                            <WrapPanel Margin="0,8,0,8">
+                                <Button Style="{StaticResource ChipButtonStyle}" Content="直角 0px" Tag="0" Margin="0,0,6,0" Click="BtnQuickCorner_Click"/>
+                                <Button Style="{StaticResource ChipButtonStyle}" Content="微圆角 6px" Tag="6" Margin="0,0,6,0" Click="BtnQuickCorner_Click"/>
+                                <Button Style="{StaticResource ChipButtonStyle}" Content="大圆角 12px" Tag="12" Click="BtnQuickCorner_Click"/>
+                            </WrapPanel>
+
+                            <DockPanel Margin="0,2,0,0">
+                                <TextBlock Text="边框样式" Style="{StaticResource RowLabelStyle}"/>
+                                <ComboBox x:Name="ComboBorderStyle"
+                                          AutomationProperties.AutomationId="ComboBorderStyle"
+                                          AutomationProperties.Name="边框样式"
+                                          Style="{StaticResource DarkComboBoxStyle}"
+                                          HorizontalAlignment="Right"
+                                          SelectionChanged="ComboBorderStyle_SelectionChanged">
+                                    <ComboBoxItem Content="细高光边框" Tag="Subtle"/>
+                                    <ComboBoxItem Content="无边框悬浮" Tag="None"/>
+                                    <ComboBoxItem Content="主题强调边框" Tag="Accent"/>
+                                </ComboBox>
+                            </DockPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 4. 图标与文字排版 -->
+                    <TextBlock Text="图标与文字" Style="{StaticResource SectionTitleStyle}"/>
+                    <Border Background="#23272F" CornerRadius="7" Padding="12,10" BorderBrush="#2E333E" BorderThickness="1">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="图标尺寸" Style="{StaticResource RowLabelStyle}"/>
+                                <ComboBox x:Name="ComboIconSize"
+                                          AutomationProperties.AutomationId="ComboIconSize"
+                                          AutomationProperties.Name="图标大小"
+                                          Style="{StaticResource DarkComboBoxStyle}"
+                                          HorizontalAlignment="Right"
+                                          SelectionChanged="ComboIconSize_SelectionChanged">
+                                    <ComboBoxItem Content="小图标" Tag="Small"/>
+                                    <ComboBoxItem Content="标准图标" Tag="Medium"/>
+                                    <ComboBoxItem Content="大图标" Tag="Large"/>
+                                </ComboBox>
+                            </DockPanel>
+
+                            <DockPanel Margin="0,0,0,6">
+                                <TextBlock Text="文字字号" Style="{StaticResource RowLabelStyle}"/>
+                                <ComboBox x:Name="ComboFontSize"
+                                          AutomationProperties.AutomationId="ComboFontSize"
+                                          AutomationProperties.Name="文字大小"
+                                          Style="{StaticResource DarkComboBoxStyle}"
+                                          HorizontalAlignment="Right"
+                                          SelectionChanged="ComboFontSize_SelectionChanged">
+                                    <ComboBoxItem Content="小字号" Tag="Small"/>
+                                    <ComboBoxItem Content="标准字号" Tag="Medium"/>
+                                    <ComboBoxItem Content="大字号" Tag="Large"/>
+                                </ComboBox>
+                            </DockPanel>
+
+                            <CheckBox x:Name="ChkTextShadow"
+                                      AutomationProperties.AutomationId="ChkTextShadow"
+                                      AutomationProperties.Name="开启文字阴影（防壁纸撞色）"
+                                      Style="{StaticResource DarkCheckBoxStyle}"
+                                      Content="开启文字阴影（全透明或复杂壁纸上更清晰）"
+                                      Click="OptionCheckBox_Changed"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 5. 标题栏样式 -->
+                    <TextBlock Text="标题栏样式" Style="{StaticResource SectionTitleStyle}"/>
+                    <Border Background="#23272F" CornerRadius="7" Padding="12,10" BorderBrush="#2E333E" BorderThickness="1">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,6">
+                                <TextBlock Text="标题对齐" Style="{StaticResource RowLabelStyle}"/>
+                                <ComboBox x:Name="ComboTitleAlign"
+                                          AutomationProperties.AutomationId="ComboTitleAlign"
+                                          AutomationProperties.Name="标题对齐方式"
+                                          Style="{StaticResource DarkComboBoxStyle}"
+                                          HorizontalAlignment="Right"
+                                          SelectionChanged="ComboTitleAlign_SelectionChanged">
+                                    <ComboBoxItem Content="居中对齐" Tag="Center"/>
+                                    <ComboBoxItem Content="居左对齐" Tag="Left"/>
+                                </ComboBox>
+                            </DockPanel>
+
+                            <CheckBox x:Name="ChkHeaderBand"
+                                      AutomationProperties.AutomationId="ChkHeaderBand"
+                                      AutomationProperties.Name="显示独立标题栏底色与分隔线"
+                                      Style="{StaticResource DarkCheckBoxStyle}"
+                                      Content="显示独立标题栏底色与分隔线"
+                                      Click="OptionCheckBox_Changed"/>
+                            <CheckBox x:Name="ChkAutoFadeButtons"
+                                      AutomationProperties.AutomationId="ChkAutoFadeButtons"
+                                      AutomationProperties.Name="鼠标移开时自动隐藏顶栏按钮"
+                                      Style="{StaticResource DarkCheckBoxStyle}"
+                                      Content="鼠标移开时自动隐藏顶栏按钮（仅留标题）"
+                                      Click="OptionCheckBox_Changed"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- 底部操作栏 -->
+            <Border Grid.Row="2" Background="#17191E" CornerRadius="0,0,10,10" BorderBrush="#2A2E38" BorderThickness="0,1,0,0" Padding="14,0">
+                <Grid VerticalAlignment="Center">
+                    <Button x:Name="BtnResetDefault"
+                            AutomationProperties.AutomationId="BtnResetDefault"
+                            AutomationProperties.Name="恢复默认外观"
+                            Style="{StaticResource FooterButtonStyle}"
+                            HorizontalAlignment="Left"
+                            Content="恢复默认"
+                            Click="BtnResetDefault_Click"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button x:Name="BtnApplyToAll"
+                                AutomationProperties.AutomationId="BtnApplyToAll"
+                                AutomationProperties.Name="同步到全部格子"
+                                Style="{StaticResource FooterButtonStyle}"
+                                Content="同步到全部格子"
+                                Margin="0,0,8,0"
+                                Click="BtnApplyToAll_Click"/>
+                        <Button x:Name="BtnDone"
+                                AutomationProperties.AutomationId="BtnDone"
+                                AutomationProperties.Name="完成"
+                                Style="{StaticResource PrimaryButtonStyle}"
+                                Content="完成"
+                                Click="BtnClose_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>
