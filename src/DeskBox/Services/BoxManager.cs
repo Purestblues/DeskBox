@@ -137,6 +137,8 @@ public sealed class BoxManager : IDisposable
             RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
         }
 
+        NordThemeService.ApplyTheme(Config.General.UiTheme);
+
         if (!_isSandbox)
         {
             _hotkeyHost = new HotkeyHostWindow(ToggleHotkeyId, ToggleAllBoxesVisibility, HandleIpcCommand);
@@ -153,9 +155,17 @@ public sealed class BoxManager : IDisposable
 
         MigrateLegacyStorageBackToDesktop();
 
+        var hadCurrentSnapshot = Config.LayoutSnapshots.TryGetValue(_currentSignature, out var initialSnapshot);
+        var missingAnyBoxInSnapshot = !hadCurrentSnapshot ||
+            Config.Boxes.Any(b => !initialSnapshot!.Placements.ContainsKey(b.Id));
+        var upgradedAnyPlacement = false;
+
         foreach (var boxCfg in Config.Boxes)
         {
-            CreateAndShowBoxWindow(boxCfg, monitors);
+            if (CreateAndShowBoxWindow(boxCfg, monitors))
+            {
+                upgradedAnyPlacement = true;
+            }
         }
 
         if (Config.Tidy.IsTidyPaused)
@@ -191,6 +201,7 @@ public sealed class BoxManager : IDisposable
         SetupDesktopWatchers();
         _desktopViewWatchTimer.Start();
 
+        var wasBoxesHidden = Config.Tidy.BoxesHidden;
         Config.Tidy.BoxesHidden = false;
 
         if (!_isSandbox)
@@ -203,7 +214,14 @@ public sealed class BoxManager : IDisposable
             _mouseHook.Start();
         }
 
-        RecordCurrentPlacementsAndSave(immediate: true);
+        if (missingAnyBoxInSnapshot || upgradedAnyPlacement)
+        {
+            RecordCurrentPlacementsAndSave(immediate: true, propagateSameMonitor: false);
+        }
+        else if (wasBoxesHidden)
+        {
+            ConfigService.SaveImmediate(Config);
+        }
         SystemEvents.DisplaySettingsChanged += SystemEvents_DisplaySettingsChanged;
         if (Application.Current != null)
         {
@@ -299,7 +317,7 @@ public sealed class BoxManager : IDisposable
         ApplyTopologySnapshotToAllWindows(monitors);
     }
 
-    private void CreateAndShowBoxWindow(BoxConfig boxCfg, IReadOnlyList<MonitorDescriptor> monitors)
+    private bool CreateAndShowBoxWindow(BoxConfig boxCfg, IReadOnlyList<MonitorDescriptor> monitors)
     {
         var window = new DeskBoxWindow(boxCfg, ShellService, HostService, this);
         if (_isSandbox)
@@ -313,7 +331,7 @@ public sealed class BoxManager : IDisposable
         _windows.Add(window);
         window.Show();
 
-        var placement = ResolveInitialPlacementForBox(boxCfg, monitors);
+        var placement = ResolveInitialPlacementForBox(boxCfg, monitors, out var upgradedFromNewerSnapshot);
         var (expandedRect, headerH, _, _) = MonitorTopologyService.ResolvePhysicalPlacement(placement, monitors);
         boxCfg.IsCollapsed = placement.IsCollapsed;
         window.ApplyPhysicalPlacement(expandedRect, headerH);
@@ -330,6 +348,8 @@ public sealed class BoxManager : IDisposable
                     NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE);
             }
         }
+
+        return upgradedFromNewerSnapshot;
     }
 
     private void ApplyTopologySnapshotToAllWindows(IReadOnlyList<MonitorDescriptor> monitors)
@@ -337,7 +357,7 @@ public sealed class BoxManager : IDisposable
         foreach (var window in _windows)
         {
             var boxCfg = window.Config;
-            var placement = ResolveInitialPlacementForBox(boxCfg, monitors);
+            var placement = ResolveInitialPlacementForBox(boxCfg, monitors, out _);
             var (expandedRect, headerH, _, _) = MonitorTopologyService.ResolvePhysicalPlacement(placement, monitors);
             boxCfg.IsCollapsed = placement.IsCollapsed;
             window.UpdateMonitorsCache(monitors);
@@ -346,17 +366,25 @@ public sealed class BoxManager : IDisposable
     }
 
     private BoxPlacement ResolveInitialPlacementForBox(BoxConfig boxCfg, IReadOnlyList<MonitorDescriptor> monitors)
-    {
-        if (Config.LayoutSnapshots.TryGetValue(_currentSignature, out var snapshot) &&
-            snapshot.Placements.TryGetValue(boxCfg.Id, out var savedPlacement))
-        {
-            return savedPlacement;
-        }
+        => ResolveInitialPlacementForBox(boxCfg, monitors, out _);
 
-        return boxCfg.FallbackPlacement;
+    private BoxPlacement ResolveInitialPlacementForBox(
+        BoxConfig boxCfg,
+        IReadOnlyList<MonitorDescriptor> monitors,
+        out bool upgradedFromNewerSnapshot)
+    {
+        var resolved = MonitorTopologyService.ResolveBoxPlacement(boxCfg, _currentSignature, Config.LayoutSnapshots, monitors);
+        upgradedFromNewerSnapshot = Config.LayoutSnapshots.TryGetValue(_currentSignature, out var currentSnap) &&
+            currentSnap.Placements.TryGetValue(boxCfg.Id, out var currentStored) &&
+            (Math.Abs(resolved.RelX - currentStored.RelX) > 1e-5 ||
+             Math.Abs(resolved.RelY - currentStored.RelY) > 1e-5 ||
+             Math.Abs(resolved.RelWidth - currentStored.RelWidth) > 1e-5 ||
+             Math.Abs(resolved.RelExpandedHeight - currentStored.RelExpandedHeight) > 1e-5 ||
+             resolved.IsCollapsed != currentStored.IsCollapsed);
+        return resolved;
     }
 
-    public void RecordCurrentPlacementsAndSave(bool immediate = false)
+    public void RecordCurrentPlacementsAndSave(bool immediate = false, bool propagateSameMonitor = true)
     {
         var monitors = TopologyService.GetConnectedMonitors();
         if (monitors.Count == 0)
@@ -381,8 +409,17 @@ public sealed class BoxManager : IDisposable
             if (rect.Width <= 0 || rect.Height <= 0)
                 continue;
             var placement = MonitorTopologyService.CapturePlacement(rect, expandedH, w.Config.IsCollapsed, monitors);
-            snapshot.Placements[w.BoxId] = placement;
-            w.Config.FallbackPlacement = placement;
+            snapshot.Placements[w.BoxId] = placement.Clone();
+            w.Config.FallbackPlacement = placement.Clone();
+
+            if (propagateSameMonitor)
+            {
+                MonitorTopologyService.PropagateSameMonitorPlacement(
+                    w.BoxId,
+                    placement,
+                    _currentSignature,
+                    Config.LayoutSnapshots);
+            }
         }
 
         if (immediate) ConfigService.SaveImmediate(Config);
@@ -1585,7 +1622,7 @@ public sealed class BoxManager : IDisposable
             IconFilterService.RestoreDesktopIconPositions(Config.SavedDesktopIconPositions);
         }
 
-        RecordCurrentPlacementsAndSave(immediate: true);
+        RecordCurrentPlacementsAndSave(immediate: true, propagateSameMonitor: false);
         _appearanceWindow?.Close();
         _guideOverlay?.Close();
         _trayService?.Dispose();

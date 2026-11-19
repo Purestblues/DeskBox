@@ -79,6 +79,13 @@ public sealed class AppConfig
     public Dictionary<string, DesktopIconPoint> SavedDesktopIconPositions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
+public enum UiThemeMode
+{
+    System,
+    Light,
+    Dark
+}
+
 public sealed class GeneralSettings
 {
     public bool AutoStart { get; set; }
@@ -86,6 +93,8 @@ public sealed class GeneralSettings
     public bool MinimizeToTrayOnClose { get; set; } = true;
     public bool HideTrayIcon { get; set; } = false;
     public string ToggleHotkey { get; set; } = "Alt+Space";
+    public UiThemeMode UiTheme { get; set; } = UiThemeMode.System;
+    public bool ReduceMotion { get; set; } = false;
 }
 
 public sealed class TidySettings
@@ -264,4 +273,15 @@ public sealed class BoxPlacement
     public double RelWidth { get; set; } = 0.19;
     public double RelExpandedHeight { get; set; } = 0.42;
     public bool IsCollapsed { get; set; }
+
+    public BoxPlacement Clone() => new()
+    {
+        MonitorId = MonitorId,
+        WasPrimaryMonitor = WasPrimaryMonitor,
+        RelX = RelX,
+        RelY = RelY,
+        RelWidth = RelWidth,
+        RelExpandedHeight = RelExpandedHeight,
+        IsCollapsed = IsCollapsed
+    };
 }

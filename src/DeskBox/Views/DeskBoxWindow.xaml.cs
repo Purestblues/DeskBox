@@ -96,6 +96,7 @@ public partial class DeskBoxWindow : Window
     private bool _isPopupOpen;
     private bool _isRenaming;
     private bool _isDraggingWindow;
+    private bool _isResizing;
     private NativeMethods.POINT _dragStartCursor;
     private NativeMethods.RECT _dragStartRect;
     private NativeMethods.POINT _resizeStartCursor;
@@ -156,7 +157,7 @@ public partial class DeskBoxWindow : Window
         _hoverCollapseTimer.Tick += (_, _) =>
         {
             _hoverCollapseTimer.Stop();
-            if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !_isRenaming)
+            if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !_isRenaming && !_isDraggingWindow && !_isResizing)
             {
                 NativeMethods.GetCursorPos(out var pt);
                 var hwnd = new WindowInteropHelper(this).Handle;
@@ -192,6 +193,8 @@ public partial class DeskBoxWindow : Window
         SourceInitialized += OnSourceInitialized;
         Closed += (_, _) =>
         {
+            _isDraggingWindow = false;
+            _isResizing = false;
             _storageWatcher?.Dispose();
             _dragExpandTimer.Stop();
             _watcherDebounceTimer.Stop();
@@ -211,7 +214,7 @@ public partial class DeskBoxWindow : Window
         {
             _hoverExpandTimer.Stop();
             UpdateHeaderButtonsFadeState();
-            if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !_isRenaming)
+            if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !_isRenaming && !_isDraggingWindow && !_isResizing)
             {
                 _hoverCollapseTimer.Start();
             }
@@ -289,7 +292,7 @@ public partial class DeskBoxWindow : Window
     {
         if (msg == NativeMethods.WM_DPICHANGED)
         {
-            if (_isDraggingWindow)
+            if (_isDraggingWindow || _isResizing)
             {
                 handled = true;
                 return IntPtr.Zero;
@@ -497,7 +500,14 @@ public partial class DeskBoxWindow : Window
     public (MonitorTopologyService.PhysicalRect currentRect, int expandedPhysicalHeight) GetPhysicalGeometry()
     {
         var hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd != IntPtr.Zero && IsVisible && NativeMethods.GetWindowRect(hwnd, out var rect) && rect.Width > 0 && rect.Height > 0)
+        if (hwnd != IntPtr.Zero &&
+            IsVisible &&
+            WindowState != WindowState.Minimized &&
+            NativeMethods.GetWindowRect(hwnd, out var rect) &&
+            rect.Width > 0 &&
+            rect.Height > 0 &&
+            rect.Left > -20000 &&
+            rect.Top > -20000)
         {
             _lastPhysicalRect = new MonitorTopologyService.PhysicalRect(rect.Left, rect.Top, rect.Width, rect.Height);
             var expandedH = (_config.IsCollapsed && !_isHoverExpanded)
@@ -1017,11 +1027,13 @@ public partial class DeskBoxWindow : Window
         var deleteBox = new MenuItem { Header = "解散此格子（保留原文件）" };
         deleteBox.Click += (_, _) =>
         {
-            if (System.Windows.MessageBox.Show(
+            if (NordConfirmDialog.Confirm(
+                this,
+                "解散桌面格子",
                 $"确定要解散格子“{_config.Title}”吗？\n放心：你的任何物理文件都不会被删除。",
-                "DeskBox",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question) == MessageBoxResult.Yes)
+                confirmText: "解散格子",
+                cancelText: "取消",
+                isDanger: true))
             {
                 _manager.RemoveBox(_config.Id);
             }
@@ -1268,6 +1280,8 @@ public partial class DeskBoxWindow : Window
 
     private void Resize_DragStarted(object sender, DragStartedEventArgs e)
     {
+        _isResizing = true;
+        _hoverCollapseTimer.Stop();
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd != IntPtr.Zero)
         {
@@ -1332,6 +1346,7 @@ public partial class DeskBoxWindow : Window
 
     private void Resize_DragCompleted(object sender, DragCompletedEventArgs e)
     {
+        _isResizing = false;
         _manager.HideAlignmentGuides();
         _manager.RecordCurrentPlacementsAndSave();
     }

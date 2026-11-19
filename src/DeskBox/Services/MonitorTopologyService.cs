@@ -231,4 +231,71 @@ public sealed class MonitorTopologyService
         int clampedY = Math.Clamp(candidateY, target.WorkY, Math.Max(target.WorkY, target.WorkY + target.WorkHeight - headerMinH));
         return (clampedX, clampedY);
     }
+
+    /// <summary>
+    /// 解析格子在当前拓扑下的最佳初始布局：若另一套拓扑快照在完全相同的显示器上记录了更新的调整，则优先采用较新的尺寸与位置，避免切回旧拓扑时退回旧尺寸。
+    /// </summary>
+    public static BoxPlacement ResolveBoxPlacement(
+        BoxConfig boxCfg,
+        string currentSignature,
+        IReadOnlyDictionary<string, TopologyLayoutSnapshot> snapshots,
+        IReadOnlyList<MonitorDescriptor> monitors)
+    {
+        if (snapshots.TryGetValue(currentSignature, out var currentSnap) &&
+            currentSnap.Placements.TryGetValue(boxCfg.Id, out var currentPlacement))
+        {
+            var best = currentPlacement;
+            var bestUpdatedAt = currentSnap.UpdatedAt;
+
+            if (!string.IsNullOrWhiteSpace(currentPlacement.MonitorId) &&
+                monitors.Any(m => string.Equals(m.MonitorId, currentPlacement.MonitorId, StringComparison.OrdinalIgnoreCase)))
+            {
+                foreach (var otherSnap in snapshots.Values)
+                {
+                    if (string.Equals(otherSnap.Signature, currentSignature, StringComparison.Ordinal) ||
+                        otherSnap.UpdatedAt <= bestUpdatedAt)
+                    {
+                        continue;
+                    }
+
+                    if (otherSnap.Placements.TryGetValue(boxCfg.Id, out var candidate) &&
+                        string.Equals(candidate.MonitorId, currentPlacement.MonitorId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        best = candidate;
+                        bestUpdatedAt = otherSnap.UpdatedAt;
+                    }
+                }
+            }
+
+            return best.Clone();
+        }
+
+        return boxCfg.FallbackPlacement.Clone();
+    }
+
+    /// <summary>
+    /// 当用户修改格子尺寸/位置/折叠状态后，把同一显示器上的最新布局同步到其他包含该显示器的历史快照中，防止后续切换拓扑或重启时退回旧尺寸。
+    /// </summary>
+    public static void PropagateSameMonitorPlacement(
+        string boxId,
+        BoxPlacement placement,
+        string sourceSignature,
+        IDictionary<string, TopologyLayoutSnapshot> snapshots)
+    {
+        if (string.IsNullOrWhiteSpace(placement.MonitorId))
+            return;
+
+        foreach (var snap in snapshots.Values)
+        {
+            if (string.Equals(snap.Signature, sourceSignature, StringComparison.Ordinal))
+                continue;
+
+            if (snap.Placements.TryGetValue(boxId, out var existing) &&
+                !string.IsNullOrWhiteSpace(existing.MonitorId) &&
+                string.Equals(existing.MonitorId, placement.MonitorId, StringComparison.OrdinalIgnoreCase))
+            {
+                snap.Placements[boxId] = placement.Clone();
+            }
+        }
+    }
 }

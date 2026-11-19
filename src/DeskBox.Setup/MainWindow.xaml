@@ -154,7 +154,7 @@
             <Grid Grid.Row="1" Margin="28,20,28,10">
                 <!-- 安装界面 -->
                 <StackPanel x:Name="InstallPanel" Visibility="Visible">
-                    <TextBlock Text="DeskBox 轻量桌面格子 v1.0.0" Foreground="#FFFFFF" FontSize="19" FontWeight="SemiBold"/>
+                    <TextBlock Text="DeskBox 轻量桌面格子 v1.1.0" Foreground="#FFFFFF" FontSize="19" FontWeight="SemiBold"/>
                     <TextBlock Text="单进程极致低占用 · 无云搜索无推销 · 多显示器拓扑防错乱" Foreground="#97A1B0" FontSize="12.5" Margin="0,6,0,18"/>
 
                     <TextBlock Text="安装目录（免管理员权限，支持覆盖升级）" Foreground="#B8C0CE" FontSize="12.5" Margin="0,0,0,6"/>

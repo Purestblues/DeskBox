@@ -9,7 +9,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>DeskBox</AssemblyName>
     <RootNamespace>DeskBox</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>DeskBox</Product>
     <Description>轻量、零推广、多显示器友好的 Windows 桌面格子工具</Description>
     <ApplicationIcon>Assets\deskbox.ico</ApplicationIcon>

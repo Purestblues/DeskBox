@@ -15,7 +15,7 @@ public sealed record InstallOptions(
 
 public sealed class InstallerEngine
 {
-    public const string AppVersion = "1.0.0";
+    public const string AppVersion = "1.1.0";
     private const string UninstallRegPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DeskBox";
     private const string RunRegPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string ManifestFileName = "install_manifest.txt";

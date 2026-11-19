@@ -51,7 +51,7 @@ if ($LASTEXITCODE -ne 0) { throw "安装程序编译失败。" }
 
 $setupExe = Join-Path $setupOutDir "DeskBox.Setup.exe"
 $suffix = if ($SelfContained) { "win-x64-standalone" } else { "win-x64" }
-$finalInstaller = Join-Path $distDir "DeskBox-Setup-1.0.0-$suffix.exe"
+$finalInstaller = Join-Path $distDir "DeskBox-Setup-1.1.0-$suffix.exe"
 Copy-Item $setupExe $finalInstaller -Force
 
 $sizeMB = [math]::Round((Get-Item $finalInstaller).Length / 1MB, 2)

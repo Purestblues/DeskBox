@@ -1,0 +1,44 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Nord Snow Storm (Light) — Single Source of Truth -->
+    <SolidColorBrush x:Key="NordAccentBrush" Color="#527CE6"/>
+    <SolidColorBrush x:Key="NordAccentHoverBrush" Color="#426BD6"/>
+    <SolidColorBrush x:Key="NordAccentTintBrush" Color="#24527CE6"/>
+    <SolidColorBrush x:Key="NordOnAccentBrush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="NordSelectionPillBrush" Color="#D2DEF5"/>
+    <SolidColorBrush x:Key="NordAccentSecondaryBrush" Color="#9D7298"/>
+
+    <SolidColorBrush x:Key="NordSurface0Brush" Color="#ECEFF4"/>
+    <SolidColorBrush x:Key="NordSurface1Brush" Color="#E5E9F0"/>
+    <SolidColorBrush x:Key="NordSurface2Brush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="NordSurface3Brush" Color="#F2F4F8"/>
+    <SolidColorBrush x:Key="NordSurface4Brush" Color="#FFFFFF"/>
+
+    <SolidColorBrush x:Key="NordBorderSubtleBrush" Color="#D8DEE9"/>
+    <SolidColorBrush x:Key="NordBorderStrongBrush" Color="#C2CAD8"/>
+    <SolidColorBrush x:Key="NordBorderPopupBrush" Color="#CFD6E4"/>
+
+    <SolidColorBrush x:Key="NordTextPrimaryBrush" Color="#2E3440"/>
+    <SolidColorBrush x:Key="NordTextSecondaryBrush" Color="#646E82"/>
+    <SolidColorBrush x:Key="NordTextTertiaryBrush" Color="#677389"/>
+    <SolidColorBrush x:Key="NordTextDisabledBrush" Color="#9AA3B5"/>
+
+    <SolidColorBrush x:Key="NordSuccessBrush" Color="#5C9A64"/>
+    <SolidColorBrush x:Key="NordSuccessTintBrush" Color="#225C9A64"/>
+    <SolidColorBrush x:Key="NordWarningBrush" Color="#C98A3E"/>
+    <SolidColorBrush x:Key="NordWarningTintBrush" Color="#22C98A3E"/>
+    <SolidColorBrush x:Key="NordDangerBrush" Color="#BF616A"/>
+    <SolidColorBrush x:Key="NordDangerTintBrush" Color="#22BF616A"/>
+
+    <SolidColorBrush x:Key="NordHoverOverlayBrush" Color="#0C2E3440"/>
+    <SolidColorBrush x:Key="NordPressedOverlayBrush" Color="#172E3440"/>
+    <SolidColorBrush x:Key="NordFocusRingBrush" Color="#38527CE6"/>
+    <SolidColorBrush x:Key="NordScrimBrush" Color="#6612151E"/>
+
+    <!-- Switch / Scrollbar subtle helpers derived strictly from Snow Storm inks -->
+    <SolidColorBrush x:Key="NordSwitchTrackOffBrush" Color="#DCE2EC"/>
+    <SolidColorBrush x:Key="NordSwitchThumbOffBrush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="NordScrollbarThumbBrush" Color="#332E3440"/>
+    <SolidColorBrush x:Key="NordScrollbarThumbHoverBrush" Color="#552E3440"/>
+    <SolidColorBrush x:Key="NordCloseHoverBrush" Color="#1FBF616A"/>
+</ResourceDictionary>

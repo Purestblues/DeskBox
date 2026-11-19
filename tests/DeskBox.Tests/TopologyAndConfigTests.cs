@@ -809,6 +809,125 @@ public sealed class TopologyAndConfigTests
         Assert.False(plan.ContainsKey(@"C:\Users\me\Desktop\Other.lnk"));
     }
 
+    [Fact]
+    public void ResolveBoxPlacement_UsesNewerSameMonitorSnapshotInsteadOfStaleSnapshot()
+    {
+        var sigSingle = MonitorTopologyService.ComputeTopologySignature([Primary2880]);
+        var sigDual = MonitorTopologyService.ComputeTopologySignature([Primary2880, SecondaryTop1920]);
+        var older = new DateTime(2026, 11, 18, 8, 0, 0, DateTimeKind.Utc);
+        var newer = new DateTime(2026, 11, 18, 19, 0, 0, DateTimeKind.Utc);
+
+        var boxOnPrimary = new BoxConfig { Id = "box1", Title = "PrimaryBox" };
+        var boxMovedAcrossMonitors = new BoxConfig { Id = "box2", Title = "SecondaryBox" };
+
+        var snapshots = new Dictionary<string, TopologyLayoutSnapshot>
+        {
+            [sigSingle] = new TopologyLayoutSnapshot
+            {
+                Signature = sigSingle,
+                UpdatedAt = older,
+                Placements = new Dictionary<string, BoxPlacement>
+                {
+                    ["box1"] = new BoxPlacement
+                    {
+                        MonitorId = Primary2880.MonitorId,
+                        RelX = 0.02,
+                        RelY = 0.02,
+                        RelWidth = 0.185,
+                        RelExpandedHeight = 0.40,
+                        IsCollapsed = true
+                    },
+                    ["box2"] = new BoxPlacement
+                    {
+                        MonitorId = Primary2880.MonitorId,
+                        RelX = 0.25,
+                        RelY = 0.02,
+                        RelWidth = 0.185,
+                        RelExpandedHeight = 0.45,
+                        IsCollapsed = false
+                    }
+                }
+            },
+            [sigDual] = new TopologyLayoutSnapshot
+            {
+                Signature = sigDual,
+                UpdatedAt = newer,
+                Placements = new Dictionary<string, BoxPlacement>
+                {
+                    ["box1"] = new BoxPlacement
+                    {
+                        MonitorId = Primary2880.MonitorId,
+                        RelX = 0.02,
+                        RelY = 0.02,
+                        RelWidth = 0.185,
+                        RelExpandedHeight = 0.82,
+                        IsCollapsed = true
+                    },
+                    ["box2"] = new BoxPlacement
+                    {
+                        MonitorId = SecondaryTop1920.MonitorId,
+                        RelX = 0.10,
+                        RelY = 0.10,
+                        RelWidth = 0.20,
+                        RelExpandedHeight = 0.60,
+                        IsCollapsed = false
+                    }
+                }
+            }
+        };
+
+        var singleMonitors = new[] { Primary2880 };
+        var resolvedBox1 = MonitorTopologyService.ResolveBoxPlacement(boxOnPrimary, sigSingle, snapshots, singleMonitors);
+        var resolvedBox2 = MonitorTopologyService.ResolveBoxPlacement(boxMovedAcrossMonitors, sigSingle, snapshots, singleMonitors);
+
+        // 同显示器上的盒子应采用更新的双屏快照尺寸（0.82），而不是退回单屏旧快照（0.40）
+        Assert.Equal(0.82, resolvedBox1.RelExpandedHeight, 5);
+        Assert.Equal(Primary2880.MonitorId, resolvedBox1.MonitorId);
+
+        // 在双屏下属于副屏的盒子，回到单屏时仍保留其在单屏主屏上的独立布局（0.45）
+        Assert.Equal(0.45, resolvedBox2.RelExpandedHeight, 5);
+        Assert.Equal(Primary2880.MonitorId, resolvedBox2.MonitorId);
+    }
+
+    [Fact]
+    public void PropagateSameMonitorPlacement_SyncsSameMonitorOnlyAndClonesValue()
+    {
+        var sigSingle = MonitorTopologyService.ComputeTopologySignature([Primary2880]);
+        var sigDual = MonitorTopologyService.ComputeTopologySignature([Primary2880, SecondaryTop1920]);
+
+        var snapshots = new Dictionary<string, TopologyLayoutSnapshot>
+        {
+            [sigSingle] = new TopologyLayoutSnapshot
+            {
+                Signature = sigSingle,
+                Placements = new Dictionary<string, BoxPlacement>
+                {
+                    ["box1"] = new BoxPlacement { MonitorId = Primary2880.MonitorId, RelExpandedHeight = 0.40 },
+                    ["box2"] = new BoxPlacement { MonitorId = Primary2880.MonitorId, RelExpandedHeight = 0.45 }
+                }
+            },
+            [sigDual] = new TopologyLayoutSnapshot
+            {
+                Signature = sigDual,
+                Placements = new Dictionary<string, BoxPlacement>
+                {
+                    ["box1"] = new BoxPlacement { MonitorId = Primary2880.MonitorId, RelExpandedHeight = 0.80 },
+                    ["box2"] = new BoxPlacement { MonitorId = SecondaryTop1920.MonitorId, RelExpandedHeight = 0.70 }
+                }
+            }
+        };
+
+        var editedBox1 = snapshots[sigDual].Placements["box1"];
+        MonitorTopologyService.PropagateSameMonitorPlacement("box1", editedBox1, sigDual, snapshots);
+
+        var editedBox2 = snapshots[sigDual].Placements["box2"];
+        MonitorTopologyService.PropagateSameMonitorPlacement("box2", editedBox2, sigDual, snapshots);
+
+        Assert.Equal(0.80, snapshots[sigSingle].Placements["box1"].RelExpandedHeight, 5);
+        Assert.NotSame(editedBox1, snapshots[sigSingle].Placements["box1"]);
+        Assert.Equal(0.45, snapshots[sigSingle].Placements["box2"].RelExpandedHeight, 5);
+    }
+
     private static void CreateTestShortcut(string shortcutPath, string targetPath, string workingDirectory, string? arguments = null)
     {
         var link = (ITestShellLinkW)new TestShellLink();

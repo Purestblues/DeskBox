@@ -15,6 +15,7 @@ public sealed class ConfigService
 
     private readonly string _configPath;
     private readonly string _backupPath;
+    private readonly object _saveLock = new();
     private CancellationTokenSource? _saveDebounceCts;
 
     public ConfigService(string? customDirectory = null)
@@ -65,16 +66,24 @@ public sealed class ConfigService
 
     public void SaveDebounced(AppConfig config, int delayMs = 400)
     {
-        _saveDebounceCts?.Cancel();
-        var cts = new CancellationTokenSource();
-        _saveDebounceCts = cts;
+        CancellationTokenSource cts;
+        lock (_saveLock)
+        {
+            _saveDebounceCts?.Cancel();
+            _saveDebounceCts?.Dispose();
+            cts = new CancellationTokenSource();
+            _saveDebounceCts = cts;
+        }
 
         _ = Task.Run(async () =>
         {
             try
             {
                 await Task.Delay(delayMs, cts.Token);
-                SaveImmediate(config);
+                if (!cts.IsCancellationRequested)
+                {
+                    WriteConfigLocked(config);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -84,20 +93,34 @@ public sealed class ConfigService
 
     public void SaveImmediate(AppConfig config)
     {
-        try
+        lock (_saveLock)
         {
-            var json = JsonSerializer.Serialize(config, JsonOptions);
-            var temp = _configPath + ".tmp";
-            File.WriteAllText(temp, json);
-            if (File.Exists(_configPath))
-            {
-                File.Copy(_configPath, _backupPath, overwrite: true);
-            }
-            File.Move(temp, _configPath, overwrite: true);
+            _saveDebounceCts?.Cancel();
+            _saveDebounceCts?.Dispose();
+            _saveDebounceCts = null;
+            WriteConfigLocked(config);
         }
-        catch
+    }
+
+    private void WriteConfigLocked(AppConfig config)
+    {
+        lock (_saveLock)
         {
-            // Ignore transient IO lock
+            try
+            {
+                var json = JsonSerializer.Serialize(config, JsonOptions);
+                var temp = _configPath + ".tmp";
+                File.WriteAllText(temp, json);
+                if (File.Exists(_configPath))
+                {
+                    File.Copy(_configPath, _backupPath, overwrite: true);
+                }
+                File.Move(temp, _configPath, overwrite: true);
+            }
+            catch
+            {
+                // Ignore transient IO lock
+            }
         }
     }
 

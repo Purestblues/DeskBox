@@ -15,7 +15,7 @@ using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 namespace DeskBox.Views;
 
 /// <summary>
-/// 轻量级格子外观个性化设置面板，支持实时预览修改与一键同步全局默认值。
+/// 轻量级格子外观个性化设置面板，遵循 Nord Frost UI 设计规范。
 /// </summary>
 public partial class BoxAppearanceWindow : Window
 {
@@ -29,15 +29,29 @@ public partial class BoxAppearanceWindow : Window
         InitializeComponent();
         _manager = manager;
         _targetWindow = targetWindow;
+        NordThemeService.ThemeChanged += OnThemeChanged;
+        Closed += (_, _) => NordThemeService.ThemeChanged -= OnThemeChanged;
         BuildColorSwatches();
         BindTarget(_targetWindow);
+    }
+
+    private void OnThemeChanged()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => RefreshSwatchBorders(_targetWindow.Config.ThemeColor));
+            return;
+        }
+        RefreshSwatchBorders(_targetWindow.Config.ThemeColor);
     }
 
     public void BindTarget(DeskBoxWindow targetWindow)
     {
         _targetWindow = targetWindow;
         var cfg = _targetWindow.Config;
-        TxtWindowTitle.Text = $"格子外观设置 - {cfg.Title}";
+        Title = $"DeskBox - 格子外观设置 ({cfg.Title})";
+        TxtWindowTitle.Text = "格子外观设置";
+        TxtTargetBoxBadge.Text = cfg.Title;
         SyncControlsFromConfig(cfg);
     }
 
@@ -53,17 +67,17 @@ public partial class BoxAppearanceWindow : Window
             {
                 Width = 24,
                 Height = 24,
-                CornerRadius = new CornerRadius(5),
+                CornerRadius = new CornerRadius(6),
                 Background = new SolidColorBrush(swatchColor),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
                 BorderThickness = new Thickness(1)
             };
+            border.SetResourceReference(Border.BorderBrushProperty, "NordBorderStrongBrush");
 
             var btn = new Button
             {
                 Width = 28,
                 Height = 28,
-                Margin = new Thickness(0, 0, 6, 6),
+                Margin = new Thickness(0, 0, 4, 4),
                 Padding = new Thickness(0),
                 Background = Brushes.Transparent,
                 BorderThickness = new Thickness(0),
@@ -135,12 +149,16 @@ public partial class BoxAppearanceWindow : Window
         TxtRVal.Text = color.R.ToString(CultureInfo.InvariantCulture);
         TxtGVal.Text = color.G.ToString(CultureInfo.InvariantCulture);
         TxtBVal.Text = color.B.ToString(CultureInfo.InvariantCulture);
+        RefreshSwatchBorders(hexText);
+    }
 
+    private void RefreshSwatchBorders(string hexText)
+    {
         foreach (var (hex, border) in _swatchBorders)
         {
             bool selected = string.Equals(hex, hexText, StringComparison.OrdinalIgnoreCase);
-            border.BorderBrush = new SolidColorBrush(selected ? Color.FromRgb(59, 130, 246) : Color.FromArgb(90, 255, 255, 255));
-            border.BorderThickness = new Thickness(selected ? 2.2 : 1);
+            border.SetResourceReference(Border.BorderBrushProperty, selected ? "NordAccentBrush" : "NordBorderStrongBrush");
+            border.BorderThickness = new Thickness(selected ? 2 : 1);
         }
     }
 
