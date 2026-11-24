@@ -31,7 +31,7 @@ namespace DeskBox.Views;
 
 public partial class DeskBoxWindow : Window
 {
-    private const string InternalDragFormat = "DeskBoxItemTransfer";
+    internal const string InternalDragFormat = "DeskBoxItemTransfer";
     private const string ShellIdListFormat = "Shell IDList Array";
 
     private static readonly Geometry ChevronUpGeometry = Geometry.Parse("M 1.5,8 L 6,3.5 L 10.5,8");
@@ -90,6 +90,7 @@ public partial class DeskBoxWindow : Window
     private readonly DispatcherTimer _hoverCollapseTimer;
     private readonly DispatcherTimer _dragExpandTimer;
     private readonly DispatcherTimer _watcherDebounceTimer;
+    private readonly DispatcherTimer _toastTimer;
     private FileSystemWatcher? _storageWatcher;
 
     private bool _isHoverExpanded;
@@ -190,7 +191,15 @@ public partial class DeskBoxWindow : Window
             RefreshItems();
         };
 
+        _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1600) };
+        _toastTimer.Tick += (_, _) =>
+        {
+            _toastTimer.Stop();
+            ToastBorder.Visibility = Visibility.Collapsed;
+        };
+
         SourceInitialized += OnSourceInitialized;
+        PreviewKeyDown += Window_PreviewKeyDown;
         Closed += (_, _) =>
         {
             _isDraggingWindow = false;
@@ -198,6 +207,7 @@ public partial class DeskBoxWindow : Window
             _storageWatcher?.Dispose();
             _dragExpandTimer.Stop();
             _watcherDebounceTimer.Stop();
+            _toastTimer.Stop();
         };
         MouseEnter += (_, _) =>
         {
@@ -277,7 +287,7 @@ public partial class DeskBoxWindow : Window
             useFrosted,
             tint,
             _config.Opacity,
-            allowBringForward: () => _manager.IsSandbox || _isHoverExpanded || _isPopupOpen);
+            allowBringForward: () => _manager.IsSandbox || _manager.IsReorderingZOrder || _isHoverExpanded || _isPopupOpen);
 
         UpdateMonitorsCache(_manager.TopologyService.GetConnectedMonitors());
         UpdateAppearance();
@@ -1359,13 +1369,71 @@ public partial class DeskBoxWindow : Window
         }
     }
 
+    private void ShowToast(string message)
+    {
+        ToastTextBlock.Text = message;
+        ToastBorder.Visibility = Visibility.Visible;
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (_isRenaming)
+            return;
+
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        if (ctrl && e.Key == Key.V)
+        {
+            e.Handled = true;
+            PerformPasteInBox();
+        }
+        else if (ctrl && e.Key == Key.A && ItemsListBox.Items.Count > 0)
+        {
+            e.Handled = true;
+            ItemsListBox.SelectAll();
+        }
+    }
+
     private void ItemsListBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (_isRenaming)
+            return;
+
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        if (ctrl && e.Key == Key.V)
+        {
+            e.Handled = true;
+            PerformPasteInBox();
+            return;
+        }
+        if (ctrl && e.Key == Key.A)
+        {
+            e.Handled = true;
+            ItemsListBox.SelectAll();
+            return;
+        }
+
         var selected = ItemsListBox.SelectedItems.OfType<BoxViewItem>().ToList();
         if (selected.Count == 0)
             return;
 
-        if (e.Key == Key.Delete)
+        if (ctrl && e.Key == Key.C)
+        {
+            e.Handled = true;
+            PerformCopyInBox(selected, isCut: false);
+        }
+        else if (ctrl && e.Key == Key.X)
+        {
+            e.Handled = true;
+            PerformCopyInBox(selected, isCut: true);
+        }
+        else if (e.Key == Key.F2 && selected.Count == 1)
+        {
+            e.Handled = true;
+            PerformRenameInBox(selected[0]);
+        }
+        else if (e.Key == Key.Delete)
         {
             e.Handled = true;
             bool shiftHeld = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
@@ -1377,6 +1445,101 @@ public partial class DeskBoxWindow : Window
             foreach (var item in selected)
                 ShellService.OpenItem(item.Path);
         }
+    }
+
+    private void PerformCopyInBox(IReadOnlyList<BoxViewItem> selected, bool isCut)
+    {
+        var paths = selected.Select(s => s.Path).ToList();
+        int count = DesktopClipboardService.CopyPathsToClipboard(paths, isCut);
+        if (count > 0)
+        {
+            ShowToast(isCut ? $"已剪切 {count} 个项目" : $"已复制 {count} 个项目");
+        }
+        else
+        {
+            ShowToast("无法复制：所选项目不存在或为系统虚拟图标");
+        }
+    }
+
+    private void PerformPasteInBox()
+    {
+        if (!DesktopClipboardService.TryReadClipboardFiles(out var sourcePaths, out var isMove))
+        {
+            ShowToast("剪贴板中没有可粘贴的文件");
+            return;
+        }
+
+        var targetDir = !string.IsNullOrWhiteSpace(_config.MappedFolderPath) && Directory.Exists(_config.MappedFolderPath)
+            ? _config.MappedFolderPath
+            : _manager.StorageService.UserDesktopDirectory;
+
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var res = DesktopClipboardService.PasteFilesToDirectory(sourcePaths, targetDir, isMove, hwnd);
+        if (res.PastedPaths.Count == 0)
+        {
+            ShowToast("粘贴失败（目标不可写入或源文件不可用）");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_config.MappedFolderPath) && !_config.IsUnorganizedBox)
+        {
+            if (isMove)
+            {
+                foreach (var moved in res.MovedSourcePaths)
+                {
+                    _manager.RemovePathFromOtherBoxes(moved, _config.Id, syncDesktopImmediately: false);
+                }
+            }
+
+            foreach (var p in res.PastedPaths)
+            {
+                if (!_config.Items.Any(i => string.Equals(i.Path, p, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _config.Items.Add(new BoxItemEntry { Path = p });
+                }
+            }
+            _manager.SaveConfigDebounced();
+        }
+
+        RefreshItems();
+        _manager.RefreshUnorganizedBoxes();
+        _manager.RefreshAllDesktopCanvases();
+        ShowToast($"已粘贴 {res.PastedPaths.Count} 个项目到「{_config.Title}」");
+    }
+
+    private void PerformRenameInBox(BoxViewItem item)
+    {
+        if (item.Path.StartsWith("shell:::", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var newName = RenamePromptDialog.Show(item.Path, this);
+        if (string.IsNullOrWhiteSpace(newName))
+            return;
+
+        var renamed = DesktopClipboardService.TryRenameFileSystemEntry(item.Path, newName);
+        if (renamed == null)
+        {
+            ShowToast("重命名失败（名称无效或已存在）");
+            return;
+        }
+
+        var oldKey = ShellService.GetItemOrderKey(item.Path);
+        var newKey = ShellService.GetItemOrderKey(renamed);
+        foreach (var entry in _config.Items)
+        {
+            if (string.Equals(entry.Path, item.Path, StringComparison.OrdinalIgnoreCase))
+                entry.Path = renamed;
+        }
+        for (int i = 0; i < _config.CustomOrder.Count; i++)
+        {
+            if (string.Equals(_config.CustomOrder[i], oldKey, StringComparison.OrdinalIgnoreCase))
+                _config.CustomOrder[i] = newKey;
+        }
+
+        _manager.SaveConfigDebounced();
+        RefreshItems();
+        _manager.RefreshAllDesktopCanvases();
+        ShowToast($"已重命名为「{Path.GetFileName(renamed)}」");
     }
 
     private void DeleteOrRemoveSelectedItems(IReadOnlyList<BoxViewItem> selected, bool permanent)
@@ -1700,6 +1863,14 @@ public partial class DeskBoxWindow : Window
                     foreach (var s in selected) ShellService.OpenItem(s.Path);
                 };
                 menu.Items.Add(openAll);
+
+                var copyAll = new MenuItem { Header = $"复制 (Ctrl+C)" };
+                copyAll.Click += (_, _) => PerformCopyInBox(selected, isCut: false);
+                menu.Items.Add(copyAll);
+
+                var cutAll = new MenuItem { Header = $"剪切 (Ctrl+X)" };
+                cutAll.Click += (_, _) => PerformCopyInBox(selected, isCut: true);
+                menu.Items.Add(cutAll);
 
                 var moveOutAll = new MenuItem { Header = $"移出格子放回桌面（共 {selected.Count} 项）" };
                 moveOutAll.Click += (_, _) => MoveSelectedItemsToDesktop(selected);
@@ -2465,5 +2636,5 @@ public partial class DeskBoxWindow : Window
             _manager.SaveConfigDebounced();
     }
 
-    private sealed record ItemTransferPayload(string SourceBoxId, IReadOnlyList<string> ItemPaths);
+    internal sealed record ItemTransferPayload(string SourceBoxId, IReadOnlyList<string> ItemPaths);
 }

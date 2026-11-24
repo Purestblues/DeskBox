@@ -67,16 +67,26 @@ public static class BoxAppearancePresets
 
 public readonly record struct DesktopIconPoint(int X, int Y);
 
+public sealed class DesktopIconGridPosition
+{
+    public string MonitorId { get; set; } = string.Empty;
+    public int Col { get; set; }
+    public int Row { get; set; }
+}
+
 public sealed class AppConfig
 {
-    public int ConfigVersion { get; set; } = 1;
+    public int ConfigVersion { get; set; } = 2;
     public GeneralSettings General { get; set; } = new();
     public TidySettings Tidy { get; set; } = new();
     public List<BoxConfig> Boxes { get; set; } = new();
     public Dictionary<string, TopologyLayoutSnapshot> LayoutSnapshots { get; set; } = new();
     public HashSet<string> HiddenSystemDesktopGuids { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    // 仅用于迁移清理旧版本遗留的隐藏属性，新版本永不再写入 Hidden 属性
     public HashSet<string> HiddenDesktopPaths { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, DesktopIconPoint> SavedDesktopIconPositions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    // 自绘桌面画布上未收纳图标的网格坐标（按规范路径索引）
+    public Dictionary<string, DesktopIconGridPosition> DesktopIconPositions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public enum UiThemeMode
@@ -116,6 +126,8 @@ public sealed class TidySettings
     public BoxSizeTier DefaultIconSizeTier { get; set; } = BoxSizeTier.Medium;
     public BoxSizeTier DefaultFontSizeTier { get; set; } = BoxSizeTier.Medium;
     public bool DefaultEnableTextShadow { get; set; }
+    public BoxSortField DesktopIconSortField { get; set; } = BoxSortField.Custom;
+    public bool DesktopIconSortDescending { get; set; }
 }
 
 public sealed class BoxConfig

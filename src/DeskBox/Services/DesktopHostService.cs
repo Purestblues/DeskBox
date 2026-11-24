@@ -207,9 +207,14 @@ public sealed class DesktopHostService
     }
 
     /// <summary>
-    /// 配置窗口为桌面挂件风格：隐藏于任务栏/Alt+Tab，启用圆角与毛玻璃，并沉底于普通应用下方。
+    /// 配置窗口为桌面挂件风格：隐藏于任务栏/Alt+Tab，沉底于普通应用下方，并通过 SWP_NOZORDER 锁定层级（零重入、不卡死）。
     /// </summary>
-    public void AttachDesktopWidgetBehavior(Window window, bool frostedGlass, System.Windows.Media.Color tintColor, double opacity, Func<bool>? allowBringForward = null)
+    public void AttachDesktopWidgetBehavior(
+        Window window,
+        bool frostedGlass,
+        System.Windows.Media.Color tintColor,
+        double opacity,
+        Func<bool>? allowBringForward = null)
     {
         var helper = new WindowInteropHelper(window);
         var hwnd = helper.Handle;
@@ -228,7 +233,7 @@ public sealed class DesktopHostService
             NativeMethods.SetWindowOwner(hwnd, desktopHost);
         }
 
-        // 3. 沉底并阻止点击时盖过其它普通应用窗口
+        // 3. 初始沉底于普通应用下方
         NativeMethods.SetWindowPos(
             hwnd,
             NativeMethods.HWND_BOTTOM,
@@ -245,13 +250,68 @@ public sealed class DesktopHostService
                     var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
                     if ((pos.flags & NativeMethods.SWP_NOZORDER) == 0)
                     {
-                        pos.hwndInsertAfter = NativeMethods.HWND_BOTTOM;
+                        // 禁止点击/激活时改变 Z-Order，既不盖过普通窗口，也不被压到桌面画布之下
+                        pos.flags |= NativeMethods.SWP_NOZORDER;
                         Marshal.StructureToPtr(pos, lParam, false);
                     }
                 }
             }
             return IntPtr.Zero;
         });
+    }
+
+    /// <summary>
+    /// 配置全屏透明桌面画布窗口：永远沉底在所有普通窗口和格子窗口之下，不进 Alt+Tab，兼容 Win+D。
+    /// </summary>
+    public void AttachDesktopCanvasBehavior(Window window, Func<bool>? allowZOrderChange = null)
+    {
+        var helper = new WindowInteropHelper(window);
+        var hwnd = helper.Handle;
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        var exStyle = NativeMethods.GetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE);
+        exStyle |= NativeMethods.WS_EX_TOOLWINDOW;
+        NativeMethods.SetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE, exStyle);
+
+        var desktopHost = FindDesktopHostWindow();
+        if (desktopHost != IntPtr.Zero)
+        {
+            NativeMethods.SetWindowOwner(hwnd, desktopHost);
+        }
+
+        SendWindowToBottom(window);
+
+        var source = HwndSource.FromHwnd(hwnd);
+        source?.AddHook((IntPtr h, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) =>
+        {
+            if (msg == NativeMethods.WM_WINDOWPOSCHANGING && lParam != IntPtr.Zero)
+            {
+                if (allowZOrderChange == null || !allowZOrderChange())
+                {
+                    var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
+                    if ((pos.flags & NativeMethods.SWP_NOZORDER) == 0)
+                    {
+                        pos.flags |= NativeMethods.SWP_NOZORDER;
+                        Marshal.StructureToPtr(pos, lParam, false);
+                    }
+                }
+            }
+            return IntPtr.Zero;
+        });
+    }
+
+    public static void SendWindowToBottom(Window window)
+    {
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        NativeMethods.SetWindowPos(
+            hwnd,
+            NativeMethods.HWND_BOTTOM,
+            0, 0, 0, 0,
+            NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
     }
 
     public static void ApplyBackdropAndCorners(IntPtr hwnd, bool frostedGlass, System.Windows.Media.Color tintColor, double opacity)

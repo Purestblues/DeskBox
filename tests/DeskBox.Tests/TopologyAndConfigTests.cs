@@ -421,38 +421,28 @@ public sealed class TopologyAndConfigTests
 
         try
         {
-            Assert.True(filter.NeedsResync(cfg));
-            Assert.True(filter.SyncHiddenDesktopIcons(cfg));
+            // 新架构下永不对文件写入 Hidden 属性
             Assert.False(filter.NeedsResync(cfg));
+            Assert.False(filter.SyncHiddenDesktopIcons(cfg));
+            Assert.True((File.GetAttributes(chromeLnk) & FileAttributes.Hidden) == 0);
+            Assert.Empty(cfg.HiddenDesktopPaths);
 
-            // 1. 仅桌面可见项被设置 Hidden 并登记到 HiddenDesktopPaths
-            Assert.True((File.GetAttributes(chromeLnk) & FileAttributes.Hidden) != 0);
-            Assert.Contains(chromeLnk, cfg.HiddenDesktopPaths);
+            // 1. 用户原本就隐藏的文件不误动
+            Assert.True((File.GetAttributes(preHiddenFile) & FileAttributes.Hidden) != 0);
 
-            // 2. 非桌面文件与用户原本就隐藏的文件不登记
-            Assert.True((File.GetAttributes(externalFile) & FileAttributes.Hidden) == 0);
-            Assert.DoesNotContain(externalFile, cfg.HiddenDesktopPaths);
-            Assert.DoesNotContain(preHiddenFile, cfg.HiddenDesktopPaths);
-
-            // 3. 桌面未整理列表不包含已隐藏/系统或已归档文件，仅含 FreeApp.lnk
+            // 2. 桌面未整理列表仅含未收纳的可见文件 FreeApp.lnk
             var unorganized = storage.EnumerateUnorganizedDesktopEntries(cfg);
             Assert.Single(unorganized);
             Assert.Equal(unorganizedFile, unorganized[0].Path);
 
-            // 4. 从格子移出后同步：仅恢复 chromeLnk，不误动 preHiddenFile
-            cfg.Boxes[0].Items.RemoveAll(i => i.Path == chromeLnk || i.Path == preHiddenFile);
+            // 3. 若配置中存在旧版遗留的 HiddenDesktopPaths，自动清理并恢复可见
+            File.SetAttributes(chromeLnk, File.GetAttributes(chromeLnk) | FileAttributes.Hidden);
+            cfg.HiddenDesktopPaths.Add(chromeLnk);
             Assert.True(filter.NeedsResync(cfg));
             Assert.True(filter.SyncHiddenDesktopIcons(cfg));
             Assert.True((File.GetAttributes(chromeLnk) & FileAttributes.Hidden) == 0);
             Assert.Empty(cfg.HiddenDesktopPaths);
             Assert.True((File.GetAttributes(preHiddenFile) & FileAttributes.Hidden) != 0);
-
-            // 5. RestoreAllHiddenDesktopIcons 也能完整清理
-            cfg.Boxes[0].Items.Add(new BoxItemEntry { Path = chromeLnk });
-            Assert.True(filter.SyncHiddenDesktopIcons(cfg));
-            Assert.True(filter.RestoreAllHiddenDesktopIcons(cfg));
-            Assert.True((File.GetAttributes(chromeLnk) & FileAttributes.Hidden) == 0);
-            Assert.Empty(cfg.HiddenDesktopPaths);
         }
         finally
         {
@@ -563,13 +553,12 @@ public sealed class TopologyAndConfigTests
 
         try
         {
-            // 先通过桌面隐藏服务标记 desktopFile（模拟已收纳桌面文件的真实状态）
-            Assert.True(filter.SyncHiddenDesktopIcons(cfg));
-            Assert.True((File.GetAttributes(desktopFile) & FileAttributes.Hidden) != 0);
-            Assert.Contains(desktopFile, cfg.HiddenDesktopPaths);
+            // 新架构下已收纳的桌面文件始终保持可见（绝不写 Hidden 属性）
+            Assert.False(filter.SyncHiddenDesktopIcons(cfg));
+            Assert.True((File.GetAttributes(desktopFile) & FileAttributes.Hidden) == 0);
+            Assert.Empty(cfg.HiddenDesktopPaths);
 
-            // 移入前清除隐藏属性，再移动到 targetFolder
-            Assert.True(filter.RestoreHiddenAttributeForPaths(cfg, [desktopFile]));
+            // 移动到 targetFolder 后依然保持正常可见
             Assert.True(ShellService.MoveOrCopyItemToFolder(desktopFile, targetFolder, copy: false));
 
             var movedFile = Path.Combine(targetFolder, "Draft.txt");
@@ -980,5 +969,76 @@ public sealed class TopologyAndConfigTests
         void Save([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, [MarshalAs(UnmanagedType.Bool)] bool fRemember);
         void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
         void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+    }
+
+    [Fact]
+    public void DesktopGridLayoutService_ResolvesMultiMonitorFreeCellsWithoutOverlap()
+    {
+        var m1 = DesktopGridLayoutService.ComputeMetrics(1920, 1040);
+        var m2 = DesktopGridLayoutService.ComputeMetrics(1280, 720);
+        var grids = new List<(string, bool, DesktopGridLayoutService.GridMetrics)>
+        {
+            ("MON1", true, m1),
+            ("MON2", false, m2)
+        };
+
+        var saved = new Dictionary<string, DesktopIconGridPosition>(StringComparer.OrdinalIgnoreCase)
+        {
+            [@"C:\Desktop\A.docx"] = new() { MonitorId = "MON1", Col = 2, Row = 1 },
+            [@"C:\Desktop\B.docx"] = new() { MonitorId = "MON1", Col = 2, Row = 1 },
+            [@"C:\Desktop\C.docx"] = new() { MonitorId = "MON2", Col = 0, Row = 0 },
+            [@"C:\Desktop\D.docx"] = new() { MonitorId = "OFFLINE_MON", Col = 1, Row = 1 }
+        };
+
+        var resolved = DesktopGridLayoutService.ResolveAllPositions(
+            [@"C:\Desktop\A.docx", @"C:\Desktop\B.docx", @"C:\Desktop\C.docx", @"C:\Desktop\D.docx", @"C:\Desktop\E.docx"],
+            saved,
+            grids,
+            out var changed);
+
+        Assert.True(changed);
+        Assert.Equal(("MON1", 2, 1), (resolved[@"C:\Desktop\A.docx"].MonitorId, resolved[@"C:\Desktop\A.docx"].Col, resolved[@"C:\Desktop\A.docx"].Row));
+        Assert.NotEqual((2, 1), (resolved[@"C:\Desktop\B.docx"].Col, resolved[@"C:\Desktop\B.docx"].Row));
+        Assert.Equal(("MON2", 0, 0), (resolved[@"C:\Desktop\C.docx"].MonitorId, resolved[@"C:\Desktop\C.docx"].Col, resolved[@"C:\Desktop\C.docx"].Row));
+        Assert.Equal("MON1", resolved[@"C:\Desktop\D.docx"].MonitorId);
+        Assert.Equal("MON1", resolved[@"C:\Desktop\E.docx"].MonitorId);
+
+        var uniqueCells = resolved.Values.Select(v => (v.MonitorId, v.Col, v.Row)).ToHashSet();
+        Assert.Equal(5, uniqueCells.Count);
+    }
+
+    [Fact]
+    public void DesktopClipboardService_PasteSameDirectory_CreatesCopySuffixAndNeverHides()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DeskBoxClipboardTest_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var srcDoc = Path.Combine(tempRoot, "标准多级列表、字体字号模板文档.docx");
+        File.WriteAllText(srcDoc, "template-bytes");
+
+        try
+        {
+            var res1 = DesktopClipboardService.PasteFilesToDirectory([srcDoc], tempRoot, isMove: false);
+            Assert.Single(res1.PastedPaths);
+            var copy1 = res1.PastedPaths[0];
+            Assert.EndsWith("标准多级列表、字体字号模板文档 - 副本.docx", copy1);
+            Assert.True(File.Exists(copy1));
+            Assert.Equal("template-bytes", File.ReadAllText(copy1));
+            Assert.True((File.GetAttributes(copy1) & FileAttributes.Hidden) == 0);
+
+            var res2 = DesktopClipboardService.PasteFilesToDirectory([srcDoc], tempRoot, isMove: false);
+            Assert.Single(res2.PastedPaths);
+            Assert.EndsWith("标准多级列表、字体字号模板文档 - 副本 (2).docx", res2.PastedPaths[0]);
+
+            var lnk = Path.Combine(tempRoot, "MyApp.lnk");
+            File.WriteAllText(lnk, "shortcut");
+            var renamed = DesktopClipboardService.TryRenameFileSystemEntry(lnk, "NewApp");
+            Assert.NotNull(renamed);
+            Assert.EndsWith("NewApp.lnk", renamed!);
+            Assert.True(File.Exists(renamed!));
+        }
+        finally
+        {
+            try { Directory.Delete(tempRoot, recursive: true); } catch { }
+        }
     }
 }

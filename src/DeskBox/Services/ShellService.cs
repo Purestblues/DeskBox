@@ -838,7 +838,8 @@ public sealed class ShellService
         int screenX,
         int screenY,
         Action onRemoveFromBox,
-        Action? onRefreshAfterShellCommand = null)
+        Action? onRefreshAfterShellCommand = null,
+        string customTopActionLabel = "放回桌面（移出格子）")
     {
         IntPtr pidl = IntPtr.Zero;
         IntPtr parentFolderPtr = IntPtr.Zero;
@@ -877,7 +878,7 @@ public sealed class ShellService
             const uint customRemoveId = 1;
             const uint customOpenFolderId = 2;
 
-            NativeMethods.InsertMenu(hMenu, 0, MF_BYPOSITION, new UIntPtr(customRemoveId), "放回桌面（移出格子）");
+            NativeMethods.InsertMenu(hMenu, 0, MF_BYPOSITION, new UIntPtr(customRemoveId), customTopActionLabel);
             if (!itemPath.StartsWith("shell:::", StringComparison.OrdinalIgnoreCase))
             {
                 NativeMethods.InsertMenu(hMenu, 1, MF_BYPOSITION, new UIntPtr(customOpenFolderId), "打开文件所在位置");

@@ -314,6 +314,24 @@
                                VerticalAlignment="Center"
                                IsHitTestVisible="False"
                                Visibility="Collapsed"/>
+
+                    <!-- 轻量操作反馈 Toast -->
+                    <Border x:Name="ToastBorder"
+                            Visibility="Collapsed"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Bottom"
+                            Margin="8,0,8,8"
+                            Padding="10,4"
+                            CornerRadius="12"
+                            Background="#DD2E3440"
+                            BorderBrush="#6688C0D0"
+                            BorderThickness="1"
+                            IsHitTestVisible="False">
+                        <TextBlock x:Name="ToastTextBlock"
+                                   Foreground="#ECEFF4"
+                                   FontSize="11.5"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </Border>
                 </Grid>
             </Grid>
             </Border>

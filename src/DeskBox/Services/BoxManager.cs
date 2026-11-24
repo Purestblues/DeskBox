@@ -30,10 +30,10 @@ public sealed class BoxManager : IDisposable
 
     private readonly Dispatcher _dispatcher;
     private readonly List<DeskBoxWindow> _windows = new();
+    private readonly List<DesktopCanvasWindow> _canvasWindows = new();
     private readonly DispatcherTimer _displayChangeDebounce;
     private readonly DispatcherTimer _idleTrimTimer;
     private readonly DispatcherTimer _desktopSyncDebounce;
-    private readonly DispatcherTimer _desktopViewWatchTimer;
     private readonly List<FileSystemWatcher> _desktopWatchers = new();
 
     private TrayIconService? _trayService;
@@ -49,9 +49,11 @@ public sealed class BoxManager : IDisposable
     private CancellationTokenSource? _pureDesktopRestoreCts;
     private CancellationTokenSource? _ipcCts;
     private bool _isDisposed;
+    private bool _isReorderingZOrder;
     private readonly bool _isSandbox;
 
     public bool IsSandbox => _isSandbox;
+    public bool IsReorderingZOrder => _isReorderingZOrder;
     public ConfigService ConfigService { get; }
     public MonitorTopologyService TopologyService { get; }
     public ShellService ShellService { get; }
@@ -115,18 +117,6 @@ public sealed class BoxManager : IDisposable
             _desktopSyncDebounce.Stop();
             OnDesktopFilesChanged();
         };
-
-        _desktopViewWatchTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000) };
-        _desktopViewWatchTimer.Tick += (_, _) =>
-        {
-            if (!Config.Tidy.IsTidyPaused && !Config.Tidy.BoxesHidden && IconFilterService.NeedsResync(Config))
-            {
-                if (IconFilterService.SyncHiddenDesktopIcons(Config))
-                {
-                    ConfigService.SaveDebounced(Config);
-                }
-            }
-        };
     }
 
     public void Start()
@@ -155,6 +145,18 @@ public sealed class BoxManager : IDisposable
 
         MigrateLegacyStorageBackToDesktop();
 
+        // 启动时自动清理旧版可能遗留的 Hidden 文件属性与系统图标注册表隐藏项
+        if (Config.HiddenDesktopPaths.Count > 0)
+        {
+            IconFilterService.RestoreAllHiddenDesktopIcons(Config);
+            ConfigService.SaveImmediate(Config);
+        }
+        if (Config.HiddenSystemDesktopGuids.Count > 0)
+        {
+            RestoreAllSystemDesktopIcons(refreshImmediately: false);
+            ConfigService.SaveImmediate(Config);
+        }
+
         var hadCurrentSnapshot = Config.LayoutSnapshots.TryGetValue(_currentSignature, out var initialSnapshot);
         var missingAnyBoxInSnapshot = !hadCurrentSnapshot ||
             Config.Boxes.Any(b => !initialSnapshot!.Placements.ContainsKey(b.Id));
@@ -174,32 +176,29 @@ public sealed class BoxManager : IDisposable
             {
                 w.Hide();
             }
-            RestoreAllSystemDesktopIcons();
-            IconFilterService.RestoreAllHiddenDesktopIcons(Config);
+            HideDesktopCanvases();
             if (!_isSandbox)
             {
                 HostService.SetNativeDesktopIconsVisible(true);
             }
         }
-        else if (Config.Tidy.HideNativeDesktopIcons)
+        else
         {
             if (!_isSandbox)
             {
                 HostService.SetNativeDesktopIconsVisible(false);
                 _nativeIconsHiddenByUs = true;
             }
-        }
-        else
-        {
-            IconFilterService.SyncHiddenDesktopIcons(Config);
-            if (!_isSandbox && Config.SavedDesktopIconPositions.Count > 0)
+
+            if (!Config.Tidy.HideNativeDesktopIcons)
             {
-                ScheduleDesktopIconPositionsRestore();
+                SyncDesktopCanvasesForMonitors(monitors, show: true);
+                RefreshAllDesktopCanvases();
             }
+            EnsureCanvasesAtBottom();
         }
 
         SetupDesktopWatchers();
-        _desktopViewWatchTimer.Start();
 
         var wasBoxesHidden = Config.Tidy.BoxesHidden;
         Config.Tidy.BoxesHidden = false;
@@ -299,6 +298,13 @@ public sealed class BoxManager : IDisposable
 
         _currentSignature = MonitorTopologyService.ComputeTopologySignature(monitors);
         ApplyTopologySnapshotToAllWindows(monitors);
+
+        if (!Config.Tidy.IsTidyPaused && !Config.Tidy.BoxesHidden && !Config.Tidy.HideNativeDesktopIcons)
+        {
+            SyncDesktopCanvasesForMonitors(monitors, show: true);
+            RefreshAllDesktopCanvases();
+            EnsureCanvasesAtBottom();
+        }
 
         if (_settingsWindow is { IsVisible: true })
         {
@@ -764,6 +770,7 @@ public sealed class BoxManager : IDisposable
             SetPureDesktopHidden(false);
         }
         CreateAndShowBoxWindow(box, monitors);
+        EnsureCanvasesAtBottom();
         RecordCurrentPlacementsAndSave(immediate: true);
     }
 
@@ -800,6 +807,7 @@ public sealed class BoxManager : IDisposable
             SetPureDesktopHidden(false);
 
         CreateAndShowBoxWindow(box, monitors);
+        EnsureCanvasesAtBottom();
         RecordCurrentPlacementsAndSave(immediate: true);
     }
 
@@ -873,6 +881,13 @@ public sealed class BoxManager : IDisposable
             changed = true;
         }
 
+        if (Config.DesktopIconPositions.TryGetValue(oldPath, out var gridPos))
+        {
+            Config.DesktopIconPositions.Remove(oldPath);
+            Config.DesktopIconPositions[newPath] = gridPos;
+            changed = true;
+        }
+
         if (changed)
             ConfigService.SaveDebounced(Config);
     }
@@ -886,7 +901,15 @@ public sealed class BoxManager : IDisposable
                 w.RefreshItems();
             }
         }
-        SyncDesktopHiddenIcons();
+        RefreshAllDesktopCanvases();
+    }
+
+    public void RefreshAllBoxes()
+    {
+        foreach (var w in _windows)
+        {
+            w.RefreshItems();
+        }
     }
 
     public void RefreshUnorganizedBoxes()
@@ -896,23 +919,200 @@ public sealed class BoxManager : IDisposable
             if (w.Config.IsUnorganizedBox)
                 w.RefreshItems();
         }
+        RefreshAllDesktopCanvases();
+    }
+
+    public void EnsureCanvasesAtBottom()
+    {
+        if (_isReorderingZOrder || _isDisposed)
+            return;
+
+        _isReorderingZOrder = true;
+        try
+        {
+            // 先将所有格子沉底于普通应用下方，再将所有桌面画布沉底于格子下方
+            foreach (var box in _windows)
+            {
+                if (box.IsVisible)
+                {
+                    DesktopHostService.SendWindowToBottom(box);
+                }
+            }
+
+            foreach (var canvas in _canvasWindows)
+            {
+                if (canvas.IsVisible)
+                {
+                    DesktopHostService.SendWindowToBottom(canvas);
+                }
+            }
+        }
+        finally
+        {
+            _isReorderingZOrder = false;
+        }
+    }
+
+    private void SyncDesktopCanvasesForMonitors(IReadOnlyList<MonitorDescriptor> monitors, bool show)
+    {
+        if (_isSandbox)
+            return;
+
+        var monitorIds = new HashSet<string>(monitors.Select(m => m.MonitorId), StringComparer.OrdinalIgnoreCase);
+
+        foreach (var stale in _canvasWindows.Where(c => !monitorIds.Contains(c.MonitorId)).ToList())
+        {
+            _canvasWindows.Remove(stale);
+            stale.Close();
+        }
+
+        foreach (var m in monitors)
+        {
+            var existing = _canvasWindows.FirstOrDefault(c =>
+                string.Equals(c.MonitorId, m.MonitorId, StringComparison.OrdinalIgnoreCase));
+            if (existing == null)
+            {
+                existing = new DesktopCanvasWindow(m, this, ShellService, HostService);
+                _canvasWindows.Add(existing);
+            }
+            else
+            {
+                existing.UpdateMonitorBounds(m);
+            }
+
+            if (show && !existing.IsVisible)
+            {
+                existing.Show();
+            }
+            else if (!show && existing.IsVisible)
+            {
+                existing.Hide();
+            }
+        }
+
+        if (show)
+        {
+            EnsureCanvasesAtBottom();
+        }
+    }
+
+    private void HideDesktopCanvases()
+    {
+        foreach (var canvas in _canvasWindows)
+        {
+            if (canvas.IsVisible)
+                canvas.Hide();
+        }
+    }
+
+    public void RefreshAllDesktopCanvases()
+    {
+        if (_isDisposed || _canvasWindows.Count == 0 || Config.Tidy.IsTidyPaused || Config.Tidy.BoxesHidden || Config.Tidy.HideNativeDesktopIcons)
+            return;
+
+        var entries = StorageService.EnumerateUnorganizedDesktopEntries(Config);
+        var monitorGrids = _canvasWindows
+            .Select(c => (c.MonitorId, c.Monitor.IsPrimary, c.GetGridMetrics()))
+            .ToList();
+
+        var resolved = DesktopGridLayoutService.ResolveAllPositions(
+            entries.Select(e => e.Path).ToList(),
+            Config.DesktopIconPositions,
+            monitorGrids,
+            out var positionsChanged);
+
+        if (positionsChanged)
+        {
+            foreach (var kv in resolved)
+                Config.DesktopIconPositions[kv.Key] = kv.Value;
+            ConfigService.SaveDebounced(Config);
+        }
+
+        var entryLookup = entries.ToDictionary(e => e.Path, StringComparer.OrdinalIgnoreCase);
+        foreach (var canvas in _canvasWindows)
+        {
+            var itemsForMonitor = new List<(BoxItemEntry Entry, DesktopIconGridPosition Position)>();
+            foreach (var kv in resolved)
+            {
+                if (string.Equals(kv.Value.MonitorId, canvas.MonitorId, StringComparison.OrdinalIgnoreCase) &&
+                    entryLookup.TryGetValue(kv.Key, out var entry))
+                {
+                    itemsForMonitor.Add((entry, kv.Value));
+                }
+            }
+            canvas.RenderItems(itemsForMonitor);
+        }
+    }
+
+    public void ArrangeDesktopCanvasIcons(BoxSortField sortField, bool descending)
+    {
+        if (_canvasWindows.Count == 0)
+            return;
+
+        var primaryCanvas = _canvasWindows.FirstOrDefault(c => c.Monitor.IsPrimary) ?? _canvasWindows[0];
+        var entries = StorageService.EnumerateUnorganizedDesktopEntries(Config);
+        var sorted = sortField == BoxSortField.Custom
+            ? entries.OrderBy(e => e.DisplayName, StringComparer.CurrentCultureIgnoreCase).ToList()
+            : ShellService.SortItems(entries, sortField, descending).ToList();
+
+        var arranged = DesktopGridLayoutService.ArrangeColumnMajor(
+            sorted.Select(e => e.Path).ToList(),
+            primaryCanvas.MonitorId,
+            primaryCanvas.GetGridMetrics());
+
+        foreach (var kv in arranged)
+            Config.DesktopIconPositions[kv.Key] = kv.Value;
+
+        Config.Tidy.DesktopIconSortField = sortField;
+        Config.Tidy.DesktopIconSortDescending = descending;
+        ConfigService.SaveDebounced(Config);
+        RefreshAllDesktopCanvases();
+        primaryCanvas.ShowToast("已重新排列桌面图标");
+    }
+
+    public void MoveItemsOutOfBoxToDesktopCanvas(string sourceBoxId, IReadOnlyList<string> itemPaths)
+    {
+        var sourceWin = _windows.FirstOrDefault(w => w.BoxId == sourceBoxId);
+        if (sourceWin != null)
+        {
+            foreach (var p in itemPaths)
+            {
+                sourceWin.RemoveItemPath(p);
+            }
+            sourceWin.RefreshItems();
+        }
+        RefreshUnorganizedBoxes();
+        ConfigService.SaveDebounced(Config);
+    }
+
+    public void CreateBoxWithItems(IReadOnlyList<string> itemPaths)
+    {
+        if (itemPaths.Count == 0)
+            return;
+
+        CreateNewBox();
+        var newest = _windows.LastOrDefault();
+        if (newest != null)
+        {
+            newest.AddDroppedFiles(itemPaths);
+            RefreshAllDesktopCanvases();
+        }
+    }
+
+    public void AddItemsToBox(string targetBoxId, IReadOnlyList<string> itemPaths)
+    {
+        var targetWin = _windows.FirstOrDefault(w => w.BoxId == targetBoxId);
+        if (targetWin == null || itemPaths.Count == 0)
+            return;
+
+        targetWin.AddDroppedFiles(itemPaths);
+        RefreshAllDesktopCanvases();
     }
 
     public void SyncDesktopHiddenIcons(bool forceShellRefreshFirst = false)
     {
-        if (Config.Tidy.HideNativeDesktopIcons || Config.Tidy.IsTidyPaused)
-            return;
-
-        _dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
-        {
-            if (_isDisposed || Config.Tidy.HideNativeDesktopIcons || Config.Tidy.BoxesHidden || Config.Tidy.IsTidyPaused)
-                return;
-
-            if (IconFilterService.SyncHiddenDesktopIcons(Config, forceRefresh: forceShellRefreshFirst))
-            {
-                ConfigService.SaveDebounced(Config);
-            }
-        });
+        // 新架构不再设置任何 Hidden 文件属性，直接同步刷新桌面画布即可
+        RefreshAllDesktopCanvases();
     }
 
     public void RemovePathFromOtherBoxes(string path, string excludeBoxId, bool syncDesktopImmediately = true)
@@ -1113,53 +1313,39 @@ public sealed class BoxManager : IDisposable
         _pureDesktopRestoreCts?.Cancel();
         _pureDesktopRestoreCts?.Dispose();
         _pureDesktopRestoreCts = null;
-        _ipcCts?.Cancel();
-        _ipcCts?.Dispose();
-        _ipcCts = null;
 
-        var transition = ComputePureDesktopTransition(
-            hidden,
-            Config.Tidy.HideNativeDesktopIcons,
-            HostService.IsNativeDesktopIconsVisible(),
-            _pureDesktopNativeIconsHiddenByUs);
-
-        Config.Tidy.BoxesHidden = transition.TargetBoxesHidden;
-        _pureDesktopNativeIconsHiddenByUs = transition.NextPureDesktopNativeIconsHiddenByUs;
+        Config.Tidy.BoxesHidden = hidden;
 
         if (hidden)
         {
             HideAlignmentGuides();
-            if (transition.SetNativeIconsVisible.HasValue)
-            {
-                HostService.SetNativeDesktopIconsVisible(transition.SetNativeIconsVisible.Value);
-            }
-
+            HideDesktopCanvases();
             foreach (var w in _windows)
             {
                 w.Hide();
             }
-        }
-        else if (transition.SetNativeIconsVisible == true)
-        {
-            // 先让 Explorer 触发显示并立即重绘原生图标，再留出短暂同步窗口展示格子，消除“格子先出、桌面图标慢半秒”的割裂感
-            var sw = Stopwatch.StartNew();
-            HostService.SetNativeDesktopIconsVisible(true);
-            var remainingMs = Math.Max(0, 220 - (int)sw.ElapsedMilliseconds);
-
-            if (remainingMs > 15)
+            if (!_isSandbox)
             {
-                var cts = new CancellationTokenSource();
-                _pureDesktopRestoreCts = cts;
-                _ = WaitAndShowBoxesAsync(remainingMs, cts.Token);
-            }
-            else
-            {
-                ShowAllBoxWindows();
+                HostService.SetNativeDesktopIconsVisible(false);
             }
         }
         else
         {
+            var monitors = TopologyService.GetConnectedMonitors();
+            if (!_isSandbox)
+            {
+                HostService.SetNativeDesktopIconsVisible(false);
+                _nativeIconsHiddenByUs = true;
+            }
+
+            if (!Config.Tidy.HideNativeDesktopIcons)
+            {
+                SyncDesktopCanvasesForMonitors(monitors, show: true);
+                RefreshAllDesktopCanvases();
+            }
+
             ShowAllBoxWindows();
+            EnsureCanvasesAtBottom();
         }
 
         ConfigService.SaveDebounced(Config);
@@ -1172,7 +1358,7 @@ public sealed class BoxManager : IDisposable
         {
             w.Show();
         }
-        SyncDesktopHiddenIcons();
+        EnsureCanvasesAtBottom();
     }
 
     private async Task WaitAndShowBoxesAsync(int delayMs, CancellationToken token)
@@ -1205,65 +1391,42 @@ public sealed class BoxManager : IDisposable
         Config.Tidy.IsTidyPaused = paused;
         if (paused)
         {
-            if (!_isSandbox && !Config.Tidy.HideNativeDesktopIcons)
-            {
-                IconFilterService.CaptureVisibleDesktopIconPositions(Config);
-            }
-
             HideAlignmentGuides();
             _appearanceWindow?.Close();
+            HideDesktopCanvases();
             foreach (var w in _windows)
             {
                 w.Hide();
             }
-            RestoreAllSystemDesktopIcons(refreshImmediately: false);
-            IconFilterService.RestoreAllHiddenDesktopIcons(Config, forceRefresh: true);
             if (!_isSandbox)
             {
                 HostService.SetNativeDesktopIconsVisible(true);
-                ScheduleDesktopIconPositionsRestore();
             }
         }
         else
         {
             Config.Tidy.BoxesHidden = false;
             _pureDesktopNativeIconsHiddenByUs = false;
+            var monitors = TopologyService.GetConnectedMonitors();
+
+            if (!_isSandbox)
+            {
+                HostService.SetNativeDesktopIconsVisible(false);
+                _nativeIconsHiddenByUs = true;
+            }
+
+            if (!Config.Tidy.HideNativeDesktopIcons)
+            {
+                SyncDesktopCanvasesForMonitors(monitors, show: true);
+                RefreshAllDesktopCanvases();
+            }
+
             foreach (var w in _windows)
             {
                 w.Show();
                 w.RefreshItems();
             }
-
-            if (Config.Tidy.HideNativeDesktopIcons)
-            {
-                if (!_isSandbox)
-                {
-                    HostService.SetNativeDesktopIconsVisible(false);
-                    _nativeIconsHiddenByUs = true;
-                }
-            }
-            else
-            {
-                if (!_isSandbox)
-                {
-                    HostService.SetNativeDesktopIconsVisible(true);
-                }
-                foreach (var box in Config.Boxes)
-                {
-                    foreach (var item in box.Items)
-                    {
-                        if (item.Path.StartsWith("shell:::", StringComparison.OrdinalIgnoreCase))
-                        {
-                            HideSystemDesktopIconIfOnDesktop(item.Path, refreshImmediately: false);
-                        }
-                    }
-                }
-                IconFilterService.SyncHiddenDesktopIcons(Config, forceRefresh: true);
-                if (!_isSandbox)
-                {
-                    ScheduleDesktopIconPositionsRestore();
-                }
-            }
+            EnsureCanvasesAtBottom();
         }
 
         if (_trayToggleTidyItem != null)
@@ -1372,24 +1535,16 @@ public sealed class BoxManager : IDisposable
         Config.Tidy.HideNativeDesktopIcons = hideIcons;
         if (hideIcons)
         {
-            HostService.SetNativeDesktopIconsVisible(false);
-            _nativeIconsHiddenByUs = true;
-            _pureDesktopNativeIconsHiddenByUs = false;
+            HideDesktopCanvases();
         }
-        else
+        else if (!Config.Tidy.IsTidyPaused && !Config.Tidy.BoxesHidden)
         {
-            _nativeIconsHiddenByUs = false;
-            if (!Config.Tidy.BoxesHidden)
-            {
-                HostService.SetNativeDesktopIconsVisible(true);
-                _pureDesktopNativeIconsHiddenByUs = false;
-                SyncDesktopHiddenIcons();
-            }
-            else
-            {
-                _pureDesktopNativeIconsHiddenByUs = true;
-            }
+            var monitors = TopologyService.GetConnectedMonitors();
+            SyncDesktopCanvasesForMonitors(monitors, show: true);
+            RefreshAllDesktopCanvases();
+            EnsureCanvasesAtBottom();
         }
+        ConfigService.SaveDebounced(Config);
     }
 
     public void ToggleCollapseAllBoxes()
@@ -1591,7 +1746,6 @@ public sealed class BoxManager : IDisposable
         _displayChangeDebounce.Stop();
         _idleTrimTimer.Stop();
         _desktopSyncDebounce.Stop();
-        _desktopViewWatchTimer.Stop();
         foreach (var watcher in _desktopWatchers)
             watcher.Dispose();
         _desktopWatchers.Clear();
@@ -1605,21 +1759,17 @@ public sealed class BoxManager : IDisposable
         _hotkeyHost?.Dispose();
         WallpaperBlurService.Dispose();
 
-        if (!_isSandbox && !Config.Tidy.HideNativeDesktopIcons && !Config.Tidy.IsTidyPaused)
-        {
-            IconFilterService.CaptureVisibleDesktopIconPositions(Config);
-        }
-
         IconFilterService.RestoreAllHiddenDesktopIcons(Config);
 
-        if (!_isSandbox && (_nativeIconsHiddenByUs || _pureDesktopNativeIconsHiddenByUs || Config.Tidy.HideNativeDesktopIcons))
+        foreach (var canvas in _canvasWindows.ToList())
+        {
+            canvas.Close();
+        }
+        _canvasWindows.Clear();
+
+        if (!_isSandbox && (_nativeIconsHiddenByUs || _pureDesktopNativeIconsHiddenByUs || !Config.Tidy.IsTidyPaused))
         {
             HostService.SetNativeDesktopIconsVisible(true);
-        }
-
-        if (!_isSandbox && !Config.Tidy.HideNativeDesktopIcons && Config.SavedDesktopIconPositions.Count > 0)
-        {
-            IconFilterService.RestoreDesktopIconPositions(Config.SavedDesktopIconPositions);
         }
 
         RecordCurrentPlacementsAndSave(immediate: true, propagateSameMonitor: false);

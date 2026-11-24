@@ -1,0 +1,62 @@
+<Window x:Class="DeskBox.Views.DesktopCanvasWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="#01000000"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        AllowDrop="True"
+        Focusable="True"
+        Title="DeskBoxCanvas">
+    <Grid x:Name="RootGrid"
+          Background="#01000000"
+          Focusable="True"
+          PreviewMouseLeftButtonDown="RootGrid_PreviewMouseLeftButtonDown"
+          PreviewMouseMove="RootGrid_PreviewMouseMove"
+          PreviewMouseLeftButtonUp="RootGrid_PreviewMouseLeftButtonUp"
+          PreviewMouseRightButtonUp="RootGrid_PreviewMouseRightButtonUp"
+          PreviewKeyDown="RootGrid_PreviewKeyDown">
+
+        <!-- 桌面未收纳图标自由网格画布 -->
+        <Canvas x:Name="IconCanvas"
+                ClipToBounds="True"
+                Background="Transparent" />
+
+        <!-- 框选矩形与拖拽落点预览 -->
+        <Canvas x:Name="OverlayCanvas"
+                IsHitTestVisible="False"
+                ClipToBounds="True">
+            <Border x:Name="DropCellHighlight"
+                    Visibility="Collapsed"
+                    CornerRadius="6"
+                    Background="#2888C0D0"
+                    BorderBrush="#B088C0D0"
+                    BorderThickness="1.5" />
+            <Border x:Name="MarqueeRect"
+                    Visibility="Collapsed"
+                    Background="#305E81AC"
+                    BorderBrush="#CC88C0D0"
+                    BorderThickness="1"
+                    CornerRadius="2" />
+        </Canvas>
+
+        <!-- 轻量操作提示 Toast -->
+        <Border x:Name="ToastBorder"
+                Visibility="Collapsed"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Margin="0,0,0,28"
+                Padding="14,7"
+                CornerRadius="16"
+                Background="#DD2E3440"
+                BorderBrush="#6688C0D0"
+                BorderThickness="1"
+                IsHitTestVisible="False">
+            <TextBlock x:Name="ToastTextBlock"
+                       Foreground="#ECEFF4"
+                       FontSize="12.5"
+                       FontWeight="Medium" />
+        </Border>
+    </Grid>
+</Window>
