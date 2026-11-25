@@ -24,6 +24,7 @@ internal static class NativeMethods
     public const uint SWP_SHOWWINDOW = 0x0040;
 
     public const int WM_WINDOWPOSCHANGING = 0x0046;
+    public const int WM_WINDOWPOSCHANGED = 0x0047;
     public const int WM_DISPLAYCHANGE = 0x007E;
     public const int WM_COMMAND = 0x0111;
     public const int WM_HOTKEY = 0x0312;
@@ -56,6 +57,13 @@ internal static class NativeMethods
     public const int SHIL_EXTRALARGE = 2;
     public const int SHIL_JUMBO = 4;
 
+    public const uint SIIGBF_RESIZETOFIT = 0x00000000;
+    public const uint SIIGBF_BIGGERSIZEOK = 0x00000001;
+    public const uint SIIGBF_ICONONLY = 0x00000004;
+
+    public const uint BI_RGB = 0;
+    public const uint DIB_RGB_COLORS = 0;
+
     public const uint TPM_RETURNCMD = 0x0100;
     public const uint TPM_RIGHTBUTTON = 0x0002;
 
@@ -68,6 +76,48 @@ internal static class NativeMethods
     {
         public int X;
         public int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SIZE
+    {
+        public int cx;
+        public int cy;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFOHEADER
+    {
+        public uint biSize;
+        public int biWidth;
+        public int biHeight;
+        public ushort biPlanes;
+        public ushort biBitCount;
+        public uint biCompression;
+        public uint biSizeImage;
+        public int biXPelsPerMeter;
+        public int biYPelsPerMeter;
+        public uint biClrUsed;
+        public uint biClrImportant;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BITMAPINFO
+    {
+        public BITMAPINFOHEADER bmiHeader;
+        public uint bmiColors;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -278,6 +328,33 @@ internal static class NativeMethods
     [DllImport("shell32.dll")]
     public static extern int SHGetImageList(int iImageList, ref Guid riid, out IImageList ppv);
 
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern int SHCreateItemFromParsingName(string pszPath, IntPtr pbc, ref Guid riid, out IntPtr ppv);
+
+    [DllImport("shell32.dll")]
+    public static extern int SHGetDesktopFolder(out IntPtr ppshf);
+
+    [DllImport("gdi32.dll")]
+    public static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    public static extern int GetObject(IntPtr hgdiobj, int cbBuffer, out BITMAP lpvObject);
+
+    [DllImport("gdi32.dll")]
+    public static extern int GetDIBits(IntPtr hdc, IntPtr hbmp, uint uStartScan, uint cScanLines, [Out] byte[] lpvBits, ref BITMAPINFO lpbi, uint uUsage);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool DestroyIcon(IntPtr hIcon);
 
@@ -295,6 +372,9 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     public static extern bool DestroyMenu(IntPtr hMenu);
+
+    [DllImport("user32.dll")]
+    public static extern int GetMenuItemCount(IntPtr hMenu);
 
     [DllImport("user32.dll")]
     public static extern int TrackPopupMenuEx(IntPtr hmenu, uint fuFlags, int x, int y, IntPtr hwnd, IntPtr lptpm);
@@ -382,4 +462,13 @@ internal interface IImageList
     int Draw(IntPtr pimldp);
     int Remove(int i);
     int GetIcon(int i, int flags, out IntPtr picon);
+}
+
+[ComImport]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+[Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b")]
+internal interface IShellItemImageFactory
+{
+    [PreserveSig]
+    int GetImage(NativeMethods.SIZE size, uint flags, out IntPtr phbm);
 }

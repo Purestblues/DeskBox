@@ -40,6 +40,7 @@ public partial class DesktopCanvasWindow : Window
     private static readonly Brush SelectedBorderBrush = CreateFrozenBrush(Color.FromArgb(0xCC, 0x88, 0xC0, 0xD0));
     private static readonly Brush HoverBgBrush = CreateFrozenBrush(Color.FromArgb(0x28, 0xEC, 0xEF, 0xF4));
     private static readonly Brush HoverBorderBrush = CreateFrozenBrush(Color.FromArgb(0x55, 0xD8, 0xDE, 0xE9));
+    private static readonly Brush ShadowTextBrush = CreateFrozenBrush(Color.FromArgb(0xD8, 0x00, 0x00, 0x00));
     private static readonly DropShadowEffect IconTextShadow = CreateFrozenShadow();
 
     private static Brush CreateFrozenBrush(Color c)
@@ -54,10 +55,10 @@ public partial class DesktopCanvasWindow : Window
         var eff = new DropShadowEffect
         {
             Color = Colors.Black,
-            BlurRadius = 3.5,
-            ShadowDepth = 1.0,
+            BlurRadius = 2.5,
+            ShadowDepth = 0.5,
             Direction = 315,
-            Opacity = 0.88
+            Opacity = 0.85
         };
         eff.Freeze();
         return eff;
@@ -179,9 +180,12 @@ public partial class DesktopCanvasWindow : Window
         var validPaths = new HashSet<string>(items.Select(i => i.Entry.Path), StringComparer.OrdinalIgnoreCase);
         _selectedPaths.RemoveWhere(p => !validPaths.Contains(p));
 
+        double dpiScale = Math.Max(_monitor.ScaleX, _monitor.ScaleY);
+        int iconPx = Math.Clamp((int)Math.Round(40.0 * dpiScale), 40, 128);
+
         foreach (var (entry, pos) in items)
         {
-            var icon = _shellService.GetIcon(entry.Path);
+            var icon = _shellService.GetIcon(entry.Path, iconPx);
             var visual = CreateIconVisual(entry, icon, pos.Col, pos.Row);
             _visuals[entry.Path] = visual;
             var (left, top) = DesktopGridLayoutService.CellToCanvasPoint(pos.Col, pos.Row, _metrics);
@@ -206,27 +210,54 @@ public partial class DesktopCanvasWindow : Window
         var img = new Image
         {
             Source = icon,
-            Width = 38,
-            Height = 38,
+            Width = 40,
+            Height = 40,
             Margin = new Thickness(0, 4, 0, 5),
             HorizontalAlignment = HorizontalAlignment.Center,
-            Stretch = Stretch.Uniform
+            Stretch = Stretch.Uniform,
+            SnapsToDevicePixels = true,
+            UseLayoutRounding = true
         };
         RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
 
-        var txt = new TextBlock
+        var shadowTxt = new TextBlock
         {
             Text = entry.DisplayName,
-            Foreground = Brushes.White,
-            FontSize = 11.5,
+            Foreground = ShadowTextBrush,
+            FontSize = 12,
             TextAlignment = TextAlignment.Center,
             TextWrapping = TextWrapping.Wrap,
             TextTrimming = TextTrimming.CharacterEllipsis,
             MaxHeight = 34,
             LineHeight = 16,
             HorizontalAlignment = HorizontalAlignment.Center,
-            Effect = IconTextShadow
+            Margin = new Thickness(0, 1, 0, 0),
+            Effect = IconTextShadow,
+            IsHitTestVisible = false
         };
+
+        var txt = new TextBlock
+        {
+            Text = entry.DisplayName,
+            Foreground = Brushes.White,
+            FontSize = 12,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxHeight = 34,
+            LineHeight = 16,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            SnapsToDevicePixels = true,
+            UseLayoutRounding = true
+        };
+        TextOptions.SetTextFormattingMode(txt, TextFormattingMode.Display);
+
+        var labelGrid = new Grid
+        {
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        labelGrid.Children.Add(shadowTxt);
+        labelGrid.Children.Add(txt);
 
         var panel = new StackPanel
         {
@@ -234,7 +265,7 @@ public partial class DesktopCanvasWindow : Window
             VerticalAlignment = VerticalAlignment.Top
         };
         panel.Children.Add(img);
-        panel.Children.Add(txt);
+        panel.Children.Add(labelGrid);
 
         var border = new Border
         {
@@ -493,6 +524,7 @@ public partial class DesktopCanvasWindow : Window
                     onRemoveFromBox: () => _manager.CreateBoxWithItems([hitPath]),
                     onRefreshAfterShellCommand: () => _manager.RefreshAllDesktopCanvases(),
                     customTopActionLabel: "新建格子并收纳此项");
+                _manager.EnsureCanvasesAtBottom();
             }
             else
             {
@@ -503,7 +535,23 @@ public partial class DesktopCanvasWindow : Window
             return;
         }
 
-        ShowBlankDesktopContextMenu();
+        NativeMethods.GetCursorPos(out var cursorPt);
+        if (!ShellService.ShowNativeDesktopBackgroundContextMenu(
+            cursorPt.X,
+            cursorPt.Y,
+            _manager.StorageService.UserDesktopDirectory,
+            onArrangeIcons: (field, desc) => _manager.ArrangeDesktopCanvasIcons(field, desc),
+            onRefreshDesktop: () =>
+            {
+                _manager.RefreshAllDesktopCanvases();
+                ShowToast("已刷新桌面");
+            },
+            onTogglePureDesktop: () => _manager.ToggleAllBoxesVisibility(),
+            onAfterShellCommand: () => _manager.RefreshAllDesktopCanvases()))
+        {
+            ShowBlankDesktopContextMenu();
+        }
+        _manager.EnsureCanvasesAtBottom();
         e.Handled = true;
     }
 

@@ -922,6 +922,28 @@ public sealed class BoxManager : IDisposable
         RefreshAllDesktopCanvases();
     }
 
+    public void PushCanvasesBelowBoxes()
+    {
+        if (_isDisposed || _isReorderingZOrder)
+            return;
+
+        _isReorderingZOrder = true;
+        try
+        {
+            foreach (var canvas in _canvasWindows)
+            {
+                if (canvas.IsVisible)
+                {
+                    DesktopHostService.SendWindowToBottom(canvas);
+                }
+            }
+        }
+        finally
+        {
+            _isReorderingZOrder = false;
+        }
+    }
+
     public void EnsureCanvasesAtBottom()
     {
         if (_isReorderingZOrder || _isDisposed)

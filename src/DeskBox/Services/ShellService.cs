@@ -14,35 +14,38 @@ namespace DeskBox.Services;
 
 public sealed class ShellService
 {
-    private const int MaxCachedIcons = 96;
+    private const int MaxCachedIcons = 160;
     private readonly ConcurrentDictionary<string, ImageSource> _iconCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Queue<string> _cacheOrder = new();
     private readonly object _cacheLock = new();
 
-    public ImageSource? GetIcon(string path)
+    public ImageSource? GetIcon(string path, int desiredPixelSize = 0)
     {
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        if (_iconCache.TryGetValue(path, out var cached))
+        int pixelSize = desiredPixelSize <= 0 ? 64 : Math.Clamp(desiredPixelSize, 32, 128);
+        string cacheKey = $"{path}|{pixelSize}";
+
+        if (_iconCache.TryGetValue(cacheKey, out var cached))
             return cached;
 
-        ImageSource? created = ExtractIconCore(path);
+        ImageSource? created = ExtractIconCore(path, pixelSize);
         if (created == null)
             return null;
 
         created.Freeze();
         lock (_cacheLock)
         {
-            if (!_iconCache.ContainsKey(path))
+            if (!_iconCache.ContainsKey(cacheKey))
             {
                 if (_cacheOrder.Count >= MaxCachedIcons)
                 {
                     var oldest = _cacheOrder.Dequeue();
                     _iconCache.TryRemove(oldest, out _);
                 }
-                _iconCache[path] = created;
-                _cacheOrder.Enqueue(path);
+                _iconCache[cacheKey] = created;
+                _cacheOrder.Enqueue(cacheKey);
             }
         }
         return created;
@@ -57,16 +60,20 @@ public sealed class ShellService
         }
     }
 
-    private static ImageSource? ExtractIconCore(string path)
+    private static ImageSource? ExtractIconCore(string path, int pixelSize)
     {
+        var iconPath = path.Contains("26EE0668-A00A-44D7-9371-BEB064C986EE", StringComparison.OrdinalIgnoreCase)
+            ? System.IO.Path.Combine(Environment.SystemDirectory, "control.exe")
+            : path;
+
+        var factoryBitmap = TryExtractViaImageFactory(iconPath, pixelSize);
+        if (factoryBitmap != null)
+            return factoryBitmap;
+
         IntPtr pidl = IntPtr.Zero;
         IntPtr hIcon = IntPtr.Zero;
         try
         {
-            var iconPath = path.Contains("26EE0668-A00A-44D7-9371-BEB064C986EE", StringComparison.OrdinalIgnoreCase)
-                ? System.IO.Path.Combine(Environment.SystemDirectory, "control.exe")
-                : path;
-
             var shfi = new NativeMethods.SHFILEINFO();
             int iconIndex = -1;
 
@@ -121,7 +128,7 @@ public sealed class ShellService
             return Imaging.CreateBitmapSourceFromHIcon(
                 hIcon,
                 Int32Rect.Empty,
-                BitmapSizeOptions.FromWidthAndHeight(36, 36));
+                BitmapSizeOptions.FromEmptyOptions());
         }
         catch
         {
@@ -134,6 +141,122 @@ public sealed class ShellService
             if (pidl != IntPtr.Zero)
                 NativeMethods.CoTaskMemFree(pidl);
         }
+    }
+
+    private static BitmapSource? TryExtractViaImageFactory(string iconPath, int pixelSize)
+    {
+        IntPtr factoryPtr = IntPtr.Zero;
+        IShellItemImageFactory? factory = null;
+        IntPtr hBitmap = IntPtr.Zero;
+        try
+        {
+            var iidImageFactory = new Guid("bcc18b79-ba16-442f-80c4-8a59c30c463b");
+            if (NativeMethods.SHCreateItemFromParsingName(iconPath, IntPtr.Zero, ref iidImageFactory, out factoryPtr) != 0 ||
+                factoryPtr == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            factory = (IShellItemImageFactory)Marshal.GetObjectForIUnknown(factoryPtr);
+            var size = new NativeMethods.SIZE { cx = pixelSize, cy = pixelSize };
+            int hr = factory.GetImage(size, NativeMethods.SIIGBF_ICONONLY | NativeMethods.SIIGBF_BIGGERSIZEOK, out hBitmap);
+            if (hr != 0 || hBitmap == IntPtr.Zero)
+                return null;
+
+            return CreateBitmapSourcePreservingAlpha(hBitmap);
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            if (hBitmap != IntPtr.Zero)
+                NativeMethods.DeleteObject(hBitmap);
+            if (factory != null)
+                Marshal.ReleaseComObject(factory);
+            if (factoryPtr != IntPtr.Zero)
+                Marshal.Release(factoryPtr);
+        }
+    }
+
+    private static BitmapSource? CreateBitmapSourcePreservingAlpha(IntPtr hBitmap)
+    {
+        if (NativeMethods.GetObject(hBitmap, Marshal.SizeOf<NativeMethods.BITMAP>(), out var bmp) == 0 ||
+            bmp.bmWidth <= 0 ||
+            bmp.bmHeight <= 0)
+        {
+            return null;
+        }
+
+        int width = bmp.bmWidth;
+        int height = bmp.bmHeight;
+        int stride = width * 4;
+        var pixels = new byte[stride * height];
+
+        var bmi = new NativeMethods.BITMAPINFO
+        {
+            bmiHeader = new NativeMethods.BITMAPINFOHEADER
+            {
+                biSize = (uint)Marshal.SizeOf<NativeMethods.BITMAPINFOHEADER>(),
+                biWidth = width,
+                biHeight = -height,
+                biPlanes = 1,
+                biBitCount = 32,
+                biCompression = NativeMethods.BI_RGB
+            }
+        };
+
+        IntPtr hdc = NativeMethods.GetDC(IntPtr.Zero);
+        if (hdc == IntPtr.Zero)
+            return null;
+
+        try
+        {
+            int scanLines = NativeMethods.GetDIBits(hdc, hBitmap, 0, (uint)height, pixels, ref bmi, NativeMethods.DIB_RGB_COLORS);
+            if (scanLines == 0)
+                return null;
+        }
+        finally
+        {
+            NativeMethods.ReleaseDC(IntPtr.Zero, hdc);
+        }
+
+        return CreateBitmapSourceFromBgraPixels(pixels, width, height);
+    }
+
+    public static BitmapSource? CreateBitmapSourceFromBgraPixels(byte[] pixels, int width, int height)
+    {
+        if (pixels == null || width <= 0 || height <= 0)
+            return null;
+
+        int stride = width * 4;
+        if (pixels.Length < stride * height)
+            return null;
+
+        bool anyNonZeroAlpha = false;
+        int totalBytes = stride * height;
+        for (int i = 0; i < totalBytes; i += 4)
+        {
+            byte alpha = pixels[i + 3];
+            if (alpha == 0)
+            {
+                // 清理全透明像素的残留 RGB，防止缩放插值时渗出白/黑边
+                pixels[i] = 0;
+                pixels[i + 1] = 0;
+                pixels[i + 2] = 0;
+            }
+            else
+            {
+                anyNonZeroAlpha = true;
+            }
+        }
+
+        if (!anyNonZeroAlpha)
+            return null;
+
+        // IShellItemImageFactory::GetImage 返回直通 Alpha (BGRA) 数据，不能按预乘 Pbgra32 解释
+        return BitmapSource.Create(width, height, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
     }
 
     public static void OpenItem(string path)
@@ -890,6 +1013,7 @@ public sealed class ShellService
             }
 
             using var host = new ContextMenuHostWindow(ctxMenu as IContextMenu2, ctxMenu as IContextMenu3);
+            NativeMethods.SetForegroundWindow(host.Handle);
             var selectedCmd = NativeMethods.TrackPopupMenuEx(
                 hMenu,
                 NativeMethods.TPM_RETURNCMD | NativeMethods.TPM_RIGHTBUTTON,
@@ -897,6 +1021,7 @@ public sealed class ShellService
                 screenY,
                 host.Handle,
                 IntPtr.Zero);
+            NativeMethods.PostMessage(host.Handle, 0, IntPtr.Zero, IntPtr.Zero);
 
             if (selectedCmd == customRemoveId)
             {
@@ -935,10 +1060,160 @@ public sealed class ShellService
         }
     }
 
+    /// <summary>
+    /// 弹出原汁原味的 Windows 桌面背景右键菜单（包含新建、显示设置、个性化、终端以及已注册的 DeskBox 菜单项），
+    /// 并在顶部插入面向 DeskBox 桌面画布的快捷项（排列桌面图标、刷新桌面、纯净桌面）。
+    /// </summary>
+    public static bool ShowNativeDesktopBackgroundContextMenu(
+        int screenX,
+        int screenY,
+        string desktopDirectory,
+        Action<BoxSortField, bool> onArrangeIcons,
+        Action onRefreshDesktop,
+        Action onTogglePureDesktop,
+        Action? onAfterShellCommand = null)
+    {
+        IntPtr desktopFolderPtr = IntPtr.Zero;
+        IShellFolder? desktopFolder = null;
+        IntPtr ctxMenuPtr = IntPtr.Zero;
+        IContextMenu? ctxMenu = null;
+        IntPtr hMenu = IntPtr.Zero;
+        IntPtr hSortMenu = IntPtr.Zero;
+        bool sortMenuAttached = false;
+
+        try
+        {
+            if (NativeMethods.SHGetDesktopFolder(out desktopFolderPtr) != 0 || desktopFolderPtr == IntPtr.Zero)
+                return false;
+
+            desktopFolder = (IShellFolder)Marshal.GetObjectForIUnknown(desktopFolderPtr);
+            using var host = new ContextMenuHostWindow(null, null);
+
+            var iidContextMenu = new Guid("000214E4-0000-0000-C000-000000000046");
+            if (desktopFolder.CreateViewObject(host.Handle, ref iidContextMenu, out ctxMenuPtr) != 0 || ctxMenuPtr == IntPtr.Zero)
+                return false;
+
+            ctxMenu = (IContextMenu)Marshal.GetObjectForIUnknown(ctxMenuPtr);
+            host.SetContextMenu(ctxMenu as IContextMenu2, ctxMenu as IContextMenu3);
+
+            hMenu = NativeMethods.CreatePopupMenu();
+            if (hMenu == IntPtr.Zero)
+                return false;
+
+            const uint idCmdFirst = 1000;
+            const uint idCmdLast = 0x7FFF;
+            int hrQuery = ctxMenu.QueryContextMenu(hMenu, 0, idCmdFirst, idCmdLast, 0x00000000 /* CMF_NORMAL */);
+            if (hrQuery < 0 || NativeMethods.GetMenuItemCount(hMenu) <= 0)
+                return false;
+
+            const uint MF_BYPOSITION = 0x0400;
+            const uint MF_POPUP = 0x0010;
+            const uint MF_SEPARATOR = 0x0800;
+
+            const uint customSortNameId = 10;
+            const uint customSortTimeId = 11;
+            const uint customSortTypeId = 12;
+            const uint customSortSizeId = 13;
+            const uint customSortGridId = 14;
+            const uint customRefreshId = 15;
+            const uint customPureDesktopId = 16;
+
+            hSortMenu = NativeMethods.CreatePopupMenu();
+            if (hSortMenu != IntPtr.Zero)
+            {
+                NativeMethods.InsertMenu(hSortMenu, 0, MF_BYPOSITION, new UIntPtr(customSortNameId), "按名称排序");
+                NativeMethods.InsertMenu(hSortMenu, 1, MF_BYPOSITION, new UIntPtr(customSortTimeId), "按修改时间排序");
+                NativeMethods.InsertMenu(hSortMenu, 2, MF_BYPOSITION, new UIntPtr(customSortTypeId), "按类型排序");
+                NativeMethods.InsertMenu(hSortMenu, 3, MF_BYPOSITION, new UIntPtr(customSortSizeId), "按大小排序");
+                NativeMethods.InsertMenu(hSortMenu, 4, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, string.Empty);
+                NativeMethods.InsertMenu(hSortMenu, 5, MF_BYPOSITION, new UIntPtr(customSortGridId), "自动对齐网格");
+            }
+
+            uint insertPos = 0;
+            if (hSortMenu != IntPtr.Zero)
+            {
+                NativeMethods.InsertMenu(hMenu, insertPos++, MF_BYPOSITION | MF_POPUP, new UIntPtr((ulong)hSortMenu.ToInt64()), "排列桌面图标");
+                sortMenuAttached = true;
+            }
+            NativeMethods.InsertMenu(hMenu, insertPos++, MF_BYPOSITION, new UIntPtr(customRefreshId), "刷新桌面 (F5)");
+            NativeMethods.InsertMenu(hMenu, insertPos++, MF_BYPOSITION, new UIntPtr(customPureDesktopId), "隐藏全部图标（纯净桌面）");
+            NativeMethods.InsertMenu(hMenu, insertPos, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, string.Empty);
+
+            NativeMethods.SetForegroundWindow(host.Handle);
+            var selectedCmd = NativeMethods.TrackPopupMenuEx(
+                hMenu,
+                NativeMethods.TPM_RETURNCMD | NativeMethods.TPM_RIGHTBUTTON,
+                screenX,
+                screenY,
+                host.Handle,
+                IntPtr.Zero);
+            NativeMethods.PostMessage(host.Handle, 0, IntPtr.Zero, IntPtr.Zero);
+
+            switch ((uint)selectedCmd)
+            {
+                case customSortNameId:
+                    onArrangeIcons(BoxSortField.Name, false);
+                    break;
+                case customSortTimeId:
+                    onArrangeIcons(BoxSortField.ModifiedTime, true);
+                    break;
+                case customSortTypeId:
+                    onArrangeIcons(BoxSortField.Type, false);
+                    break;
+                case customSortSizeId:
+                    onArrangeIcons(BoxSortField.Size, true);
+                    break;
+                case customSortGridId:
+                    onArrangeIcons(BoxSortField.Custom, false);
+                    break;
+                case customRefreshId:
+                    onRefreshDesktop();
+                    break;
+                case customPureDesktopId:
+                    onTogglePureDesktop();
+                    break;
+                default:
+                    if (selectedCmd >= idCmdFirst)
+                    {
+                        var invoke = new CMINVOKECOMMANDINFOEX
+                        {
+                            cbSize = Marshal.SizeOf<CMINVOKECOMMANDINFOEX>(),
+                            fMask = 0x00004000 /* CMIC_MASK_UNICODE */ | 0x20000000 /* CMIC_MASK_PTINVOKE */,
+                            hwnd = host.Handle,
+                            lpVerb = new IntPtr(selectedCmd - idCmdFirst),
+                            lpVerbW = new IntPtr(selectedCmd - idCmdFirst),
+                            lpDirectory = desktopDirectory,
+                            lpDirectoryW = desktopDirectory,
+                            ptInvoke = new NativeMethods.POINT { X = screenX, Y = screenY },
+                            nShow = 1 /* SW_SHOWNORMAL */
+                        };
+                        ctxMenu.InvokeCommand(ref invoke);
+                        onAfterShellCommand?.Invoke();
+                    }
+                    break;
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (hSortMenu != IntPtr.Zero && !sortMenuAttached) NativeMethods.DestroyMenu(hSortMenu);
+            if (hMenu != IntPtr.Zero) NativeMethods.DestroyMenu(hMenu);
+            if (ctxMenu != null) Marshal.ReleaseComObject(ctxMenu);
+            if (ctxMenuPtr != IntPtr.Zero) Marshal.Release(ctxMenuPtr);
+            if (desktopFolder != null) Marshal.ReleaseComObject(desktopFolder);
+            if (desktopFolderPtr != IntPtr.Zero) Marshal.Release(desktopFolderPtr);
+        }
+    }
+
     private sealed class ContextMenuHostWindow : IDisposable
     {
-        private readonly IContextMenu2? _cm2;
-        private readonly IContextMenu3? _cm3;
+        private IContextMenu2? _cm2;
+        private IContextMenu3? _cm3;
         private readonly HwndSource _hwndSource;
 
         public IntPtr Handle => _hwndSource.Handle;
@@ -949,6 +1224,12 @@ public sealed class ShellService
             _cm3 = cm3;
             _hwndSource = new HwndSource(new HwndSourceParameters("DeskBoxShellMenuHost") { Width = 0, Height = 0, WindowStyle = 0 });
             _hwndSource.AddHook(WndProc);
+        }
+
+        public void SetContextMenu(IContextMenu2? cm2, IContextMenu3? cm3)
+        {
+            _cm2 = cm2;
+            _cm3 = cm3;
         }
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -1006,16 +1287,16 @@ public sealed class ShellService
     [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214E6-0000-0000-C000-000000000046")]
     private interface IShellFolder
     {
-        int ParseDisplayName(IntPtr hwnd, IntPtr pbc, [MarshalAs(UnmanagedType.LPWStr)] string pszDisplayName, ref uint pchEaten, out IntPtr ppidl, ref uint pdwAttributes);
-        int EnumObjects(IntPtr hwnd, uint grfFlags, out IntPtr ppenumIDList);
-        int BindToObject(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
-        int BindToStorage(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
-        int CompareIDs(IntPtr lParam, IntPtr pidl1, IntPtr pidl2);
-        int CreateViewObject(IntPtr hwndOwner, ref Guid riid, out IntPtr ppv);
-        int GetAttributesOf(uint cidl, [MarshalAs(UnmanagedType.LPArray)] IntPtr[] apidl, ref uint rgfInOut);
-        int GetUIObjectOf(IntPtr hwndOwner, uint cidl, [MarshalAs(UnmanagedType.LPArray)] IntPtr[] apidl, ref Guid riid, IntPtr rgfReserved, out IntPtr ppv);
-        int GetDisplayNameOf(IntPtr pidl, uint uFlags, IntPtr pName);
-        int SetNameOf(IntPtr hwnd, IntPtr pidl, [MarshalAs(UnmanagedType.LPWStr)] string pszName, uint uFlags, out IntPtr ppidlOut);
+        [PreserveSig] int ParseDisplayName(IntPtr hwnd, IntPtr pbc, [MarshalAs(UnmanagedType.LPWStr)] string pszDisplayName, ref uint pchEaten, out IntPtr ppidl, ref uint pdwAttributes);
+        [PreserveSig] int EnumObjects(IntPtr hwnd, uint grfFlags, out IntPtr ppenumIDList);
+        [PreserveSig] int BindToObject(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int BindToStorage(IntPtr pidl, IntPtr pbc, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int CompareIDs(IntPtr lParam, IntPtr pidl1, IntPtr pidl2);
+        [PreserveSig] int CreateViewObject(IntPtr hwndOwner, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int GetAttributesOf(uint cidl, [MarshalAs(UnmanagedType.LPArray)] IntPtr[] apidl, ref uint rgfInOut);
+        [PreserveSig] int GetUIObjectOf(IntPtr hwndOwner, uint cidl, [MarshalAs(UnmanagedType.LPArray)] IntPtr[] apidl, ref Guid riid, IntPtr rgfReserved, out IntPtr ppv);
+        [PreserveSig] int GetDisplayNameOf(IntPtr pidl, uint uFlags, IntPtr pName);
+        [PreserveSig] int SetNameOf(IntPtr hwnd, IntPtr pidl, [MarshalAs(UnmanagedType.LPWStr)] string pszName, uint uFlags, out IntPtr ppidlOut);
     }
 
     [ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214E4-0000-0000-C000-000000000046")]

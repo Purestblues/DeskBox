@@ -17,7 +17,7 @@
             Padding="8,5"
             MaxWidth="220">
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-            <Image x:Name="PreviewIcon" Width="24" Height="24" Margin="0,0,7,0"/>
+            <Image x:Name="PreviewIcon" Width="24" Height="24" Margin="0,0,7,0" RenderOptions.BitmapScalingMode="HighQuality"/>
             <TextBlock x:Name="PreviewTitle"
                        Foreground="#F5FFFFFF"
                        FontSize="12"

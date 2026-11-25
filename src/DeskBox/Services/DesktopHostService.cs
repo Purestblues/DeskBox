@@ -207,14 +207,15 @@ public sealed class DesktopHostService
     }
 
     /// <summary>
-    /// 配置窗口为桌面挂件风格：隐藏于任务栏/Alt+Tab，沉底于普通应用下方，并通过 SWP_NOZORDER 锁定层级（零重入、不卡死）。
+    /// 配置窗口为桌面挂件风格：隐藏于任务栏/Alt+Tab，沉底于普通应用下方，并强制锁定 Z-Order 为 HWND_BOTTOM（零重入、不卡死）。
     /// </summary>
     public void AttachDesktopWidgetBehavior(
         Window window,
         bool frostedGlass,
         System.Windows.Media.Color tintColor,
         double opacity,
-        Func<bool>? allowBringForward = null)
+        Func<bool>? allowBringForward = null,
+        Action? onSentToBottom = null)
     {
         var helper = new WindowInteropHelper(window);
         var hwnd = helper.Handle;
@@ -243,16 +244,25 @@ public sealed class DesktopHostService
         var source = HwndSource.FromHwnd(hwnd);
         source?.AddHook((IntPtr h, int msg, IntPtr wParam, IntPtr lParam, ref bool handled) =>
         {
-            if (msg == NativeMethods.WM_WINDOWPOSCHANGING && lParam != IntPtr.Zero)
+            if (lParam != IntPtr.Zero && (allowBringForward == null || !allowBringForward()))
             {
-                if (allowBringForward == null || !allowBringForward())
+                if (msg == NativeMethods.WM_WINDOWPOSCHANGING)
                 {
                     var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
-                    if ((pos.flags & NativeMethods.SWP_NOZORDER) == 0)
+                    if ((pos.flags & NativeMethods.SWP_NOZORDER) == 0 || (pos.flags & NativeMethods.SWP_SHOWWINDOW) != 0)
                     {
-                        // 禁止点击/激活时改变 Z-Order，既不盖过普通窗口，也不被压到桌面画布之下
-                        pos.flags |= NativeMethods.SWP_NOZORDER;
+                        // 禁止点击/激活/显示时浮到普通应用之上：显式固定为 HWND_BOTTOM
+                        pos.flags &= ~NativeMethods.SWP_NOZORDER;
+                        pos.hwndInsertAfter = NativeMethods.HWND_BOTTOM;
                         Marshal.StructureToPtr(pos, lParam, false);
+                    }
+                }
+                else if (msg == NativeMethods.WM_WINDOWPOSCHANGED)
+                {
+                    var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
+                    if ((pos.flags & NativeMethods.SWP_NOZORDER) == 0 || (pos.flags & NativeMethods.SWP_SHOWWINDOW) != 0)
+                    {
+                        onSentToBottom?.Invoke();
                     }
                 }
             }
@@ -290,9 +300,11 @@ public sealed class DesktopHostService
                 if (allowZOrderChange == null || !allowZOrderChange())
                 {
                     var pos = Marshal.PtrToStructure<NativeMethods.WINDOWPOS>(lParam);
-                    if ((pos.flags & NativeMethods.SWP_NOZORDER) == 0)
+                    if ((pos.flags & NativeMethods.SWP_NOZORDER) == 0 || (pos.flags & NativeMethods.SWP_SHOWWINDOW) != 0)
                     {
-                        pos.flags |= NativeMethods.SWP_NOZORDER;
+                        // 禁止点击/激活/显示时将桌面画布抬高到普通窗口之上，强制保持在 HWND_BOTTOM
+                        pos.flags &= ~NativeMethods.SWP_NOZORDER;
+                        pos.hwndInsertAfter = NativeMethods.HWND_BOTTOM;
                         Marshal.StructureToPtr(pos, lParam, false);
                     }
                 }

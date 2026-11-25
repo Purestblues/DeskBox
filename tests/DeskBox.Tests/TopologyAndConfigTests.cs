@@ -1,6 +1,7 @@
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Windows.Media;
 using DeskBox.Models;
 using DeskBox.Services;
 
@@ -1040,5 +1041,47 @@ public sealed class TopologyAndConfigTests
         {
             try { Directory.Delete(tempRoot, recursive: true); } catch { }
         }
+    }
+
+    [Fact]
+    public void CreateBitmapSourceFromBgraPixels_UsesStraightAlphaAndClearsTransparentRgb()
+    {
+        // 2x1 像素：左像素为半透明白色 (A=16, R/G/B=255 > A，直通 Alpha)；右像素为全透明但带残留 RGB
+        byte[] pixels =
+        [
+            255, 255, 255, 16,
+            200, 150, 100, 0
+        ];
+
+        var bmp = ShellService.CreateBitmapSourceFromBgraPixels(pixels, 2, 1);
+        Assert.NotNull(bmp);
+        Assert.Equal(PixelFormats.Bgra32, bmp!.Format);
+
+        var outPixels = new byte[8];
+        bmp.CopyPixels(outPixels, 8, 0);
+
+        // 左像素保持原直通 Alpha 数值，未被错误解释为 Pbgra32
+        Assert.Equal(255, outPixels[0]);
+        Assert.Equal(255, outPixels[1]);
+        Assert.Equal(255, outPixels[2]);
+        Assert.Equal(16, outPixels[3]);
+
+        // 右像素全透明，残留 RGB 已清零防止插值渗边
+        Assert.Equal(0, outPixels[4]);
+        Assert.Equal(0, outPixels[5]);
+        Assert.Equal(0, outPixels[6]);
+        Assert.Equal(0, outPixels[7]);
+    }
+
+    [Fact]
+    public void CreateBitmapSourceFromBgraPixels_ReturnsNullWhenAllPixelsTransparent()
+    {
+        byte[] allZeroAlpha =
+        [
+            255, 255, 255, 0,
+            128, 128, 128, 0
+        ];
+
+        Assert.Null(ShellService.CreateBitmapSourceFromBgraPixels(allZeroAlpha, 2, 1));
     }
 }

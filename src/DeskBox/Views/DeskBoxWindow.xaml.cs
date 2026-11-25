@@ -287,7 +287,8 @@ public partial class DeskBoxWindow : Window
             useFrosted,
             tint,
             _config.Opacity,
-            allowBringForward: () => _manager.IsSandbox || _manager.IsReorderingZOrder || _isHoverExpanded || _isPopupOpen);
+            allowBringForward: () => _manager.IsSandbox || _manager.IsReorderingZOrder,
+            onSentToBottom: _manager.PushCanvasesBelowBoxes);
 
         UpdateMonitorsCache(_manager.TopologyService.GetConnectedMonitors());
         UpdateAppearance();
@@ -700,6 +701,9 @@ public partial class DeskBoxWindow : Window
             img.SetValue(WidthProperty, iconSize);
             img.SetValue(HeightProperty, iconSize);
             img.SetValue(MarginProperty, new Thickness(0, 1, 0, 2));
+            img.SetValue(RenderOptions.BitmapScalingModeProperty, BitmapScalingMode.HighQuality);
+            img.SetValue(SnapsToDevicePixelsProperty, true);
+            img.SetValue(UseLayoutRoundingProperty, true);
             img.SetBinding(System.Windows.Controls.Image.SourceProperty, new System.Windows.Data.Binding(nameof(BoxViewItem.Icon)));
 
             var txt = new FrameworkElementFactory(typeof(TextBlock));
@@ -743,6 +747,9 @@ public partial class DeskBoxWindow : Window
             img.SetValue(HeightProperty, iconSize);
             img.SetValue(MarginProperty, new Thickness(2, 0, 6, 0));
             img.SetValue(VerticalAlignmentProperty, VerticalAlignment.Center);
+            img.SetValue(RenderOptions.BitmapScalingModeProperty, BitmapScalingMode.HighQuality);
+            img.SetValue(SnapsToDevicePixelsProperty, true);
+            img.SetValue(UseLayoutRoundingProperty, true);
             img.SetBinding(System.Windows.Controls.Image.SourceProperty, new System.Windows.Data.Binding(nameof(BoxViewItem.Icon)));
 
             var txt = new FrameworkElementFactory(typeof(TextBlock));
