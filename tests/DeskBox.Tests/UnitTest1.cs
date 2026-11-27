@@ -126,4 +126,31 @@ public class UnitTest1
         Assert.True(icon64!.PixelWidth > 36, $"Expected PixelWidth > 36, got {icon64.PixelWidth}");
         Assert.True(icon96!.PixelWidth >= 64, $"Expected PixelWidth >= 64, got {icon96.PixelWidth}");
     }
+
+    [Fact]
+    public void GetEditableRenameState_SelectsStemAndHidesShortcutExtension()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"DeskBoxRenameTest_{Guid.NewGuid():N}");
+        var subDirWithDot = Path.Combine(tempDir, "project.v2");
+        Directory.CreateDirectory(subDirWithDot);
+
+        try
+        {
+            var docPath = Path.Combine(tempDir, "创新篇例题详解.docx");
+            var noExtPath = Path.Combine(tempDir, "README");
+            var lnkPath = Path.Combine(tempDir, "DayNew.lnk");
+            var urlPath = Path.Combine(tempDir, "官网.url");
+
+            Assert.Equal(("创新篇例题详解.docx", "创新篇例题详解".Length), DesktopClipboardService.GetEditableRenameState(docPath));
+            Assert.Equal(("README", "README".Length), DesktopClipboardService.GetEditableRenameState(noExtPath));
+            Assert.Equal(("DayNew", "DayNew".Length), DesktopClipboardService.GetEditableRenameState(lnkPath));
+            Assert.Equal(("官网", "官网".Length), DesktopClipboardService.GetEditableRenameState(urlPath));
+            Assert.Equal(("project.v2", "project.v2".Length), DesktopClipboardService.GetEditableRenameState(subDirWithDot));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }

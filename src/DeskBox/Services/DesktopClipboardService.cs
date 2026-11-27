@@ -305,6 +305,31 @@ public static class DesktopClipboardService
         }
     }
 
+    public static (string EditableName, int SelectionLength) GetEditableRenameState(string path)
+    {
+        var fileName = Path.GetFileName(path.TrimEnd('\\', '/'));
+        if (string.IsNullOrWhiteSpace(fileName))
+            return (string.Empty, 0);
+
+        bool isDir = Directory.Exists(path);
+        if (isDir)
+            return (fileName, fileName.Length);
+
+        var ext = Path.GetExtension(fileName);
+        if (ext.Equals(".lnk", StringComparison.OrdinalIgnoreCase) || ext.Equals(".url", StringComparison.OrdinalIgnoreCase))
+        {
+            var stem = Path.GetFileNameWithoutExtension(fileName);
+            return (stem, stem.Length);
+        }
+
+        if (!string.IsNullOrEmpty(ext))
+        {
+            return (fileName, Math.Max(0, fileName.Length - ext.Length));
+        }
+
+        return (fileName, fileName.Length);
+    }
+
     public static string? TryRenameFileSystemEntry(string sourcePath, string newName)
     {
         var src = ShellService.TryNormalizePhysicalPath(sourcePath);

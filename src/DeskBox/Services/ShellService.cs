@@ -962,7 +962,8 @@ public sealed class ShellService
         int screenY,
         Action onRemoveFromBox,
         Action? onRefreshAfterShellCommand = null,
-        string customTopActionLabel = "放回桌面（移出格子）")
+        string customTopActionLabel = "放回桌面（移出格子）",
+        Action? onRename = null)
     {
         IntPtr pidl = IntPtr.Zero;
         IntPtr parentFolderPtr = IntPtr.Zero;
@@ -970,6 +971,8 @@ public sealed class ShellService
         IntPtr ctxMenuPtr = IntPtr.Zero;
         IContextMenu? ctxMenu = null;
         IntPtr hMenu = IntPtr.Zero;
+        IntPtr verbPtr = IntPtr.Zero;
+        bool invokeRename = false;
 
         try
         {
@@ -994,7 +997,11 @@ public sealed class ShellService
 
             const uint idCmdFirst = 1000;
             const uint idCmdLast = 0x7FFF;
-            ctxMenu.QueryContextMenu(hMenu, 0, idCmdFirst, idCmdLast, 0x00000000 /* CMF_NORMAL */);
+            bool isVirtualShellItem = itemPath.StartsWith("shell:::", StringComparison.OrdinalIgnoreCase);
+            uint queryFlags = (onRename != null && !isVirtualShellItem)
+                ? 0x00000010u /* CMF_CANRENAME */
+                : 0x00000000u /* CMF_NORMAL */;
+            ctxMenu.QueryContextMenu(hMenu, 0, idCmdFirst, idCmdLast, queryFlags);
 
             const uint MF_BYPOSITION = 0x0400;
             const uint MF_SEPARATOR = 0x0800;
@@ -1002,7 +1009,7 @@ public sealed class ShellService
             const uint customOpenFolderId = 2;
 
             NativeMethods.InsertMenu(hMenu, 0, MF_BYPOSITION, new UIntPtr(customRemoveId), customTopActionLabel);
-            if (!itemPath.StartsWith("shell:::", StringComparison.OrdinalIgnoreCase))
+            if (!isVirtualShellItem)
             {
                 NativeMethods.InsertMenu(hMenu, 1, MF_BYPOSITION, new UIntPtr(customOpenFolderId), "打开文件所在位置");
                 NativeMethods.InsertMenu(hMenu, 2, MF_BYPOSITION | MF_SEPARATOR, UIntPtr.Zero, string.Empty);
@@ -1033,17 +1040,40 @@ public sealed class ShellService
             }
             else if (selectedCmd >= idCmdFirst)
             {
-                var invoke = new CMINVOKECOMMANDINFOEX
+                if (onRename != null && !isVirtualShellItem)
                 {
-                    cbSize = Marshal.SizeOf<CMINVOKECOMMANDINFOEX>(),
-                    fMask = 0x00004000 /* CMIC_MASK_UNICODE */,
-                    hwnd = host.Handle,
-                    lpVerb = new IntPtr(selectedCmd - idCmdFirst),
-                    lpVerbW = new IntPtr(selectedCmd - idCmdFirst),
-                    nShow = 1 /* SW_SHOWNORMAL */
-                };
-                ctxMenu.InvokeCommand(ref invoke);
-                onRefreshAfterShellCommand?.Invoke();
+                    const int verbBufChars = 128;
+                    verbPtr = Marshal.AllocCoTaskMem(verbBufChars * 2);
+                    Marshal.WriteInt16(verbPtr, 0);
+                    if (ctxMenu.GetCommandString(
+                        new UIntPtr((uint)(selectedCmd - idCmdFirst)),
+                        0x00000004u /* GCS_VERBW */,
+                        IntPtr.Zero,
+                        verbPtr,
+                        verbBufChars) == 0)
+                    {
+                        var verb = Marshal.PtrToStringUni(verbPtr);
+                        if (string.Equals(verb, "rename", StringComparison.OrdinalIgnoreCase))
+                        {
+                            invokeRename = true;
+                        }
+                    }
+                }
+
+                if (!invokeRename)
+                {
+                    var invoke = new CMINVOKECOMMANDINFOEX
+                    {
+                        cbSize = Marshal.SizeOf<CMINVOKECOMMANDINFOEX>(),
+                        fMask = 0x00004000 /* CMIC_MASK_UNICODE */,
+                        hwnd = host.Handle,
+                        lpVerb = new IntPtr(selectedCmd - idCmdFirst),
+                        lpVerbW = new IntPtr(selectedCmd - idCmdFirst),
+                        nShow = 1 /* SW_SHOWNORMAL */
+                    };
+                    ctxMenu.InvokeCommand(ref invoke);
+                    onRefreshAfterShellCommand?.Invoke();
+                }
             }
         }
         catch
@@ -1051,12 +1081,18 @@ public sealed class ShellService
         }
         finally
         {
+            if (verbPtr != IntPtr.Zero) Marshal.FreeCoTaskMem(verbPtr);
             if (hMenu != IntPtr.Zero) NativeMethods.DestroyMenu(hMenu);
             if (ctxMenu != null) Marshal.ReleaseComObject(ctxMenu);
             if (ctxMenuPtr != IntPtr.Zero) Marshal.Release(ctxMenuPtr);
             if (parentFolder != null) Marshal.ReleaseComObject(parentFolder);
             if (parentFolderPtr != IntPtr.Zero) Marshal.Release(parentFolderPtr);
             if (pidl != IntPtr.Zero) NativeMethods.CoTaskMemFree(pidl);
+        }
+
+        if (invokeRename)
+        {
+            onRename?.Invoke();
         }
     }
 

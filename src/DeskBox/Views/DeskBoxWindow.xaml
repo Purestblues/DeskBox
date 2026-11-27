@@ -307,6 +307,11 @@
                                 Visibility="Collapsed"/>
                     </Canvas>
 
+                    <!-- 格子项目原地重命名覆盖层 -->
+                    <Canvas x:Name="ItemRenameCanvas"
+                            ClipToBounds="True"
+                            Background="{x:Null}" />
+
                     <!-- 空状态提示 -->
                     <TextBlock x:Name="EmptyHintText"
                                Text="拖入文件或快捷方式到此格子"

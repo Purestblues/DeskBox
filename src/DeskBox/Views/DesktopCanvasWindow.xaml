@@ -29,6 +29,11 @@
                 ClipToBounds="True"
                 Background="Transparent" />
 
+        <!-- 原地重命名交互覆盖层 -->
+        <Canvas x:Name="InlineRenameCanvas"
+                ClipToBounds="True"
+                Background="{x:Null}" />
+
         <!-- 框选矩形与拖拽落点预览 -->
         <Canvas x:Name="OverlayCanvas"
                 IsHitTestVisible="False"

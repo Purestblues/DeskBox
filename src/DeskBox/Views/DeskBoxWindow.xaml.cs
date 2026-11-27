@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -26,6 +27,7 @@ using MenuItem = System.Windows.Controls.MenuItem;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using Orientation = System.Windows.Controls.Orientation;
 using Point = System.Windows.Point;
+using TextBox = System.Windows.Controls.TextBox;
 
 namespace DeskBox.Views;
 
@@ -96,6 +98,13 @@ public partial class DeskBoxWindow : Window
     private bool _isHoverExpanded;
     private bool _isPopupOpen;
     private bool _isRenaming;
+    private bool _isRenamingItem;
+    private BoxViewItem? _renamingItem;
+    private string? _renamingItemInitialText;
+    private TextBox? _itemRenameBox;
+    private TextBlock? _renamingItemLabel;
+    private bool _isCommittingItemRename;
+    private bool IsAnyRenaming => _isRenaming || _isRenamingItem;
     private bool _isDraggingWindow;
     private bool _isResizing;
     private NativeMethods.POINT _dragStartCursor;
@@ -158,7 +167,7 @@ public partial class DeskBoxWindow : Window
         _hoverCollapseTimer.Tick += (_, _) =>
         {
             _hoverCollapseTimer.Stop();
-            if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !_isRenaming && !_isDraggingWindow && !_isResizing)
+            if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !IsAnyRenaming && !_isDraggingWindow && !_isResizing)
             {
                 NativeMethods.GetCursorPos(out var pt);
                 var hwnd = new WindowInteropHelper(this).Handle;
@@ -200,6 +209,13 @@ public partial class DeskBoxWindow : Window
 
         SourceInitialized += OnSourceInitialized;
         PreviewKeyDown += Window_PreviewKeyDown;
+        Deactivated += (_, _) =>
+        {
+            if (_isRenamingItem)
+            {
+                CommitItemInlineRename(apply: true);
+            }
+        };
         Closed += (_, _) =>
         {
             _isDraggingWindow = false;
@@ -224,7 +240,7 @@ public partial class DeskBoxWindow : Window
         {
             _hoverExpandTimer.Stop();
             UpdateHeaderButtonsFadeState();
-            if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !_isRenaming && !_isDraggingWindow && !_isResizing)
+            if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !IsAnyRenaming && !_isDraggingWindow && !_isResizing)
             {
                 _hoverCollapseTimer.Start();
             }
@@ -435,7 +451,7 @@ public partial class DeskBoxWindow : Window
 
     private void UpdateHeaderButtonsFadeState()
     {
-        bool hideButtons = _config.AutoFadeHeaderButtons && !IsMouseOver && !_isPopupOpen && !_isRenaming;
+        bool hideButtons = _config.AutoFadeHeaderButtons && !IsMouseOver && !_isPopupOpen && !IsAnyRenaming;
         double targetOpacity = hideButtons ? 0.0 : 1.0;
         LeftHeaderButtonsPanel.Opacity = targetOpacity;
         RightHeaderButtonsPanel.Opacity = targetOpacity;
@@ -767,6 +783,8 @@ public partial class DeskBoxWindow : Window
 
     public void RefreshItems()
     {
+        CancelItemInlineRenameUiOnly();
+
         IEnumerable<BoxItemEntry> entries;
         if (!string.IsNullOrWhiteSpace(_config.MappedFolderPath) && Directory.Exists(_config.MappedFolderPath))
         {
@@ -1386,7 +1404,7 @@ public partial class DeskBoxWindow : Window
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (_isRenaming)
+        if (IsAnyRenaming)
             return;
 
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
@@ -1404,7 +1422,7 @@ public partial class DeskBoxWindow : Window
 
     private void ItemsListBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (_isRenaming)
+        if (IsAnyRenaming)
             return;
 
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
@@ -1514,15 +1532,192 @@ public partial class DeskBoxWindow : Window
         ShowToast($"已粘贴 {res.PastedPaths.Count} 个项目到「{_config.Title}」");
     }
 
+    private static bool IsDescendantOf(DependencyObject? source, DependencyObject ancestor)
+    {
+        while (source != null)
+        {
+            if (ReferenceEquals(source, ancestor))
+                return true;
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return false;
+    }
+
+    private static T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(parent);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T typed)
+                return typed;
+            var nested = FindVisualChild<T>(child);
+            if (nested != null)
+                return nested;
+        }
+        return null;
+    }
+
     private void PerformRenameInBox(BoxViewItem item)
     {
         if (item.Path.StartsWith("shell:::", StringComparison.OrdinalIgnoreCase))
             return;
 
-        var newName = RenamePromptDialog.Show(item.Path, this);
-        if (string.IsNullOrWhiteSpace(newName))
+        if (_itemRenameBox != null)
+            CommitItemInlineRename(apply: true);
+
+        ItemsListBox.SelectedItems.Clear();
+        ItemsListBox.SelectedItem = item;
+        ItemsListBox.ScrollIntoView(item);
+        ItemsListBox.UpdateLayout();
+
+        if (ItemsListBox.ItemContainerGenerator.ContainerFromItem(item) is not ListBoxItem lbi)
             return;
 
+        var txt = FindVisualChild<TextBlock>(lbi);
+        if (txt == null)
+            return;
+
+        var (editableName, selectLen) = DesktopClipboardService.GetEditableRenameState(item.Path);
+        if (string.IsNullOrWhiteSpace(editableName))
+            return;
+
+        _isRenamingItem = true;
+        _renamingItem = item;
+        _renamingItemInitialText = editableName;
+        _renamingItemLabel = txt;
+        UpdateHeaderButtonsFadeState();
+
+        var txtPos = txt.TransformToAncestor(ContentHostGrid).Transform(new Point(0, 0));
+        bool isGrid = _config.ViewMode == BoxViewMode.Grid;
+
+        var tb = new TextBox
+        {
+            Text = editableName,
+            FontSize = txt.FontSize,
+            TextAlignment = isGrid ? TextAlignment.Center : TextAlignment.Left,
+            TextWrapping = isGrid ? TextWrapping.Wrap : TextWrapping.NoWrap,
+            AcceptsReturn = false,
+            Background = new SolidColorBrush(Color.FromArgb(0xF5, 0xFF, 0xFF, 0xFF)),
+            Foreground = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)),
+            CaretBrush = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(3, 1, 3, 2)
+        };
+        AutomationProperties.SetAutomationId(tb, "BoxItemInlineRenameBox");
+        AutomationProperties.SetName(tb, "格子项目重命名输入框");
+
+        double hostWidth = ContentHostGrid.ActualWidth > 0 ? ContentHostGrid.ActualWidth : ActualWidth;
+        double hostHeight = ContentHostGrid.ActualHeight > 0 ? ContentHostGrid.ActualHeight : ActualHeight;
+
+        if (isGrid)
+        {
+            double labelCenterX = txtPos.X + txt.ActualWidth / 2.0;
+            tb.MinWidth = Math.Max(txt.ActualWidth + 12, 68);
+            tb.MaxWidth = Math.Max(120, hostWidth - 12);
+            double top = Math.Max(2, txtPos.Y - 2);
+
+            void RepositionGridBox()
+            {
+                double w = tb.ActualWidth > 0 ? tb.ActualWidth : tb.MinWidth;
+                double maxLeft = Math.Max(2, hostWidth - w - 2);
+                double left = Math.Clamp(labelCenterX - w / 2.0, 2, maxLeft);
+                double clampedTop = Math.Clamp(top, 2, Math.Max(2, hostHeight - Math.Max(tb.ActualHeight, 22) - 2));
+                Canvas.SetLeft(tb, left);
+                Canvas.SetTop(tb, clampedTop);
+            }
+
+            tb.SizeChanged += (_, _) => RepositionGridBox();
+            RepositionGridBox();
+        }
+        else
+        {
+            double left = Math.Max(2, txtPos.X - 3);
+            double top = Math.Max(2, txtPos.Y - 2);
+            tb.Width = Math.Max(80, hostWidth - left - 18);
+            Canvas.SetLeft(tb, left);
+            Canvas.SetTop(tb, top);
+        }
+
+        tb.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+                CommitItemInlineRename(apply: true);
+            }
+            else if (e.Key == Key.Escape)
+            {
+                e.Handled = true;
+                CommitItemInlineRename(apply: false);
+            }
+        };
+        tb.LostKeyboardFocus += (_, _) => CommitItemInlineRename(apply: true);
+
+        txt.Visibility = Visibility.Hidden;
+        _itemRenameBox = tb;
+        ItemRenameCanvas.Children.Add(tb);
+
+        Activate();
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (_itemRenameBox != tb)
+                return;
+            tb.Focus();
+            Keyboard.Focus(tb);
+            tb.Select(0, Math.Clamp(selectLen, 0, tb.Text.Length));
+        });
+    }
+
+    private void CancelItemInlineRenameUiOnly()
+    {
+        if (_itemRenameBox != null)
+        {
+            ItemRenameCanvas.Children.Remove(_itemRenameBox);
+            _itemRenameBox = null;
+        }
+        if (_renamingItemLabel != null)
+        {
+            _renamingItemLabel.Visibility = Visibility.Visible;
+            _renamingItemLabel = null;
+        }
+        _renamingItem = null;
+        _renamingItemInitialText = null;
+        _isRenamingItem = false;
+        UpdateHeaderButtonsFadeState();
+    }
+
+    private void CommitItemInlineRename(bool apply)
+    {
+        if (_isCommittingItemRename || _itemRenameBox == null)
+            return;
+
+        _isCommittingItemRename = true;
+        try
+        {
+            var item = _renamingItem;
+            var initialText = _renamingItemInitialText;
+            var newName = _itemRenameBox.Text.Trim();
+
+            CancelItemInlineRenameUiOnly();
+
+            if (!apply || item == null || string.IsNullOrWhiteSpace(newName))
+                return;
+
+            if (string.Equals(newName, initialText, StringComparison.Ordinal))
+                return;
+
+            ApplyRenameResultInBox(item, newName);
+        }
+        finally
+        {
+            _isCommittingItemRename = false;
+        }
+    }
+
+    private void ApplyRenameResultInBox(BoxViewItem item, string newName)
+    {
         var renamed = DesktopClipboardService.TryRenameFileSystemEntry(item.Path, newName);
         if (renamed == null)
         {
@@ -1655,6 +1850,16 @@ public partial class DeskBoxWindow : Window
 
     private void ItemsListBox_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (_itemRenameBox != null)
+        {
+            if (IsDescendantOf(e.OriginalSource as DependencyObject, _itemRenameBox))
+                return;
+
+            CommitItemInlineRename(apply: true);
+            e.Handled = true;
+            return;
+        }
+
         if (IsInsideScrollBar(e.OriginalSource as DependencyObject))
             return;
 
@@ -1848,6 +2053,14 @@ public partial class DeskBoxWindow : Window
 
     private void ItemsListBox_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_itemRenameBox != null)
+        {
+            if (IsDescendantOf(e.OriginalSource as DependencyObject, _itemRenameBox))
+                return;
+
+            CommitItemInlineRename(apply: true);
+        }
+
         var (lbi, hitItemBorder) = FindHitItemContent(e.OriginalSource as DependencyObject);
 
         if (lbi != null && hitItemBorder != null && lbi.DataContext is BoxViewItem viewItem)
@@ -1904,7 +2117,8 @@ public partial class DeskBoxWindow : Window
                     {
                         CleanupMissingItems();
                         RefreshItems();
-                    });
+                    },
+                    onRename: () => Dispatcher.BeginInvoke(DispatcherPriority.Input, () => PerformRenameInBox(viewItem)));
             }
             finally
             {
@@ -1936,7 +2150,7 @@ public partial class DeskBoxWindow : Window
     {
         _dragExpandTimer.Stop();
         HideInsertionIndicator();
-        if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !_isRenaming)
+        if (_config.IsCollapsed && _isHoverExpanded && !_isPopupOpen && !IsAnyRenaming)
         {
             _hoverCollapseTimer.Start();
         }

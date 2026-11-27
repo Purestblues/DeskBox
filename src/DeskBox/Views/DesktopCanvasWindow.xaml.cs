@@ -1,5 +1,6 @@
 using System.IO;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -23,6 +24,7 @@ using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using MenuItem = System.Windows.Controls.MenuItem;
 using MouseEventArgs = System.Windows.Input.MouseEventArgs;
 using Point = System.Windows.Point;
+using TextBox = System.Windows.Controls.TextBox;
 using VerticalAlignment = System.Windows.VerticalAlignment;
 
 namespace DeskBox.Views;
@@ -70,6 +72,7 @@ public partial class DesktopCanvasWindow : Window
         public required string DisplayName { get; init; }
         public required ImageSource? Icon { get; init; }
         public required Border RootBorder { get; init; }
+        public required Grid LabelGrid { get; init; }
         public int Col { get; set; }
         public int Row { get; set; }
     }
@@ -90,6 +93,11 @@ public partial class DesktopCanvasWindow : Window
     private Point _dragStartPoint;
     private DragPreviewWindow? _dragPreview;
     private Point? _lastContextMenuPoint;
+    private string? _renamingPath;
+    private string? _renamingInitialText;
+    private TextBox? _inlineRenameBox;
+    private UIElement? _renamingLabelGrid;
+    private bool _isCommittingRename;
 
     public string MonitorId => _monitor.MonitorId;
     public MonitorDescriptor Monitor => _monitor;
@@ -114,6 +122,13 @@ public partial class DesktopCanvasWindow : Window
         };
 
         SourceInitialized += OnSourceInitialized;
+        Deactivated += (_, _) =>
+        {
+            if (_inlineRenameBox != null)
+            {
+                CommitInlineRename(apply: true);
+            }
+        };
         Closed += (_, _) =>
         {
             _toastTimer.Stop();
@@ -174,6 +189,7 @@ public partial class DesktopCanvasWindow : Window
 
     public void RenderItems(IReadOnlyList<(BoxItemEntry Entry, DesktopIconGridPosition Position)> items)
     {
+        CancelInlineRenameUiOnly();
         IconCanvas.Children.Clear();
         _visuals.Clear();
 
@@ -304,6 +320,7 @@ public partial class DesktopCanvasWindow : Window
             DisplayName = entry.DisplayName,
             Icon = icon,
             RootBorder = border,
+            LabelGrid = labelGrid,
             Col = col,
             Row = row
         };
@@ -337,8 +354,30 @@ public partial class DesktopCanvasWindow : Window
         return null;
     }
 
+    private static bool IsDescendantOf(DependencyObject? source, DependencyObject ancestor)
+    {
+        while (source != null)
+        {
+            if (ReferenceEquals(source, ancestor))
+                return true;
+            source = VisualTreeHelper.GetParent(source);
+        }
+        return false;
+    }
+
     private void RootGrid_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (_inlineRenameBox != null)
+        {
+            if (IsDescendantOf(e.OriginalSource as DependencyObject, _inlineRenameBox))
+                return;
+
+            CommitInlineRename(apply: true);
+            RootGrid.Focus();
+            e.Handled = true;
+            return;
+        }
+
         RootGrid.Focus();
         var hitPath = FindHitIconPath(e.OriginalSource as DependencyObject);
 
@@ -501,6 +540,14 @@ public partial class DesktopCanvasWindow : Window
 
     private void RootGrid_PreviewMouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {
+        if (_inlineRenameBox != null)
+        {
+            if (IsDescendantOf(e.OriginalSource as DependencyObject, _inlineRenameBox))
+                return;
+
+            CommitInlineRename(apply: true);
+        }
+
         RootGrid.Focus();
         _lastContextMenuPoint = e.GetPosition(RootGrid);
         var hitPath = FindHitIconPath(e.OriginalSource as DependencyObject);
@@ -523,7 +570,8 @@ public partial class DesktopCanvasWindow : Window
                     pt.Y,
                     onRemoveFromBox: () => _manager.CreateBoxWithItems([hitPath]),
                     onRefreshAfterShellCommand: () => _manager.RefreshAllDesktopCanvases(),
-                    customTopActionLabel: "新建格子并收纳此项");
+                    customTopActionLabel: "新建格子并收纳此项",
+                    onRename: () => Dispatcher.BeginInvoke(DispatcherPriority.Input, () => BeginInlineRename(hitPath)));
                 _manager.EnsureCanvasesAtBottom();
             }
             else
@@ -681,6 +729,9 @@ public partial class DesktopCanvasWindow : Window
 
     private void RootGrid_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (_inlineRenameBox != null)
+            return;
+
         bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
         bool shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
 
@@ -709,7 +760,7 @@ public partial class DesktopCanvasWindow : Window
         }
         else if (e.Key == Key.F2 && _selectedPaths.Count == 1)
         {
-            PerformRename(_selectedPaths.First());
+            BeginInlineRename(_selectedPaths.First());
             e.Handled = true;
         }
         else if (e.Key == Key.Delete && _selectedPaths.Count > 0)
@@ -778,12 +829,141 @@ public partial class DesktopCanvasWindow : Window
         ShowToast($"已粘贴 {res.PastedPaths.Count} 个项目到桌面");
     }
 
-    private void PerformRename(string path)
+    private void BeginInlineRename(string path)
     {
-        var newName = RenamePromptDialog.Show(path, this);
-        if (string.IsNullOrWhiteSpace(newName))
+        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("shell:::", StringComparison.OrdinalIgnoreCase))
             return;
 
+        if (!_visuals.TryGetValue(path, out var visual))
+            return;
+
+        if (_inlineRenameBox != null)
+            CommitInlineRename(apply: true);
+
+        var (editableName, selectLen) = DesktopClipboardService.GetEditableRenameState(path);
+        if (string.IsNullOrWhiteSpace(editableName))
+            return;
+
+        _selectedPaths.Clear();
+        _selectedPaths.Add(path);
+        ApplySelectionAndCutVisuals();
+
+        visual.LabelGrid.Visibility = Visibility.Hidden;
+        _renamingPath = path;
+        _renamingInitialText = editableName;
+        _renamingLabelGrid = visual.LabelGrid;
+
+        var tb = new TextBox
+        {
+            Text = editableName,
+            FontSize = 12,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            AcceptsReturn = false,
+            Background = new SolidColorBrush(Color.FromArgb(0xF5, 0xFF, 0xFF, 0xFF)),
+            Foreground = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)),
+            CaretBrush = new SolidColorBrush(Color.FromRgb(0x1A, 0x1A, 0x1A)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x00, 0x78, 0xD4)),
+            BorderThickness = new Thickness(1),
+            Padding = new Thickness(3, 1, 3, 2),
+            MinWidth = Math.Max(visual.RootBorder.Width + 8, 88),
+            MaxWidth = 180
+        };
+        AutomationProperties.SetAutomationId(tb, "CanvasInlineRenameBox");
+        AutomationProperties.SetName(tb, "重命名输入框");
+
+        double iconLeft = Canvas.GetLeft(visual.RootBorder);
+        double iconTop = Canvas.GetTop(visual.RootBorder);
+        double centerX = iconLeft + visual.RootBorder.Width / 2.0;
+        double top = Math.Max(4, Math.Min(iconTop + 53, Math.Max(4, RootGrid.ActualHeight - 32)));
+
+        void RepositionBox()
+        {
+            double w = tb.ActualWidth > 0 ? tb.ActualWidth : tb.MinWidth;
+            double maxLeft = Math.Max(4, RootGrid.ActualWidth - w - 4);
+            double left = Math.Clamp(centerX - w / 2.0, 4, maxLeft);
+            double clampedTop = Math.Clamp(top, 4, Math.Max(4, RootGrid.ActualHeight - Math.Max(tb.ActualHeight, 24) - 4));
+            Canvas.SetLeft(tb, left);
+            Canvas.SetTop(tb, clampedTop);
+        }
+
+        tb.SizeChanged += (_, _) => RepositionBox();
+        tb.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+                CommitInlineRename(apply: true);
+            }
+            else if (e.Key == Key.Escape)
+            {
+                e.Handled = true;
+                CommitInlineRename(apply: false);
+            }
+        };
+        tb.LostKeyboardFocus += (_, _) => CommitInlineRename(apply: true);
+
+        _inlineRenameBox = tb;
+        InlineRenameCanvas.Children.Add(tb);
+        RepositionBox();
+
+        Activate();
+        Dispatcher.BeginInvoke(DispatcherPriority.Input, () =>
+        {
+            if (_inlineRenameBox != tb)
+                return;
+            tb.Focus();
+            Keyboard.Focus(tb);
+            tb.Select(0, Math.Clamp(selectLen, 0, tb.Text.Length));
+        });
+    }
+
+    private void CancelInlineRenameUiOnly()
+    {
+        if (_inlineRenameBox != null)
+        {
+            InlineRenameCanvas.Children.Remove(_inlineRenameBox);
+            _inlineRenameBox = null;
+        }
+        if (_renamingLabelGrid != null)
+        {
+            _renamingLabelGrid.Visibility = Visibility.Visible;
+            _renamingLabelGrid = null;
+        }
+        _renamingPath = null;
+        _renamingInitialText = null;
+    }
+
+    private void CommitInlineRename(bool apply)
+    {
+        if (_isCommittingRename || _inlineRenameBox == null)
+            return;
+
+        _isCommittingRename = true;
+        try
+        {
+            var oldPath = _renamingPath;
+            var initialText = _renamingInitialText;
+            var newName = _inlineRenameBox.Text.Trim();
+
+            CancelInlineRenameUiOnly();
+
+            if (!apply || string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newName))
+                return;
+
+            if (string.Equals(newName, initialText, StringComparison.Ordinal))
+                return;
+
+            ApplyRenameResult(oldPath, newName);
+        }
+        finally
+        {
+            _isCommittingRename = false;
+        }
+    }
+
+    private void ApplyRenameResult(string path, string newName)
+    {
         var renamed = DesktopClipboardService.TryRenameFileSystemEntry(path, newName);
         if (renamed == null)
         {
